@@ -1,0 +1,610 @@
+:root {
+   --primary-color: #1a73e8;
+    --header-bg: #f1f3f4; /* Был желтый #fff59d, стал приятный светло-серый */
+    --border-color: #ddd;
+    --row-hover: #edf2fa
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    background: #f8f9fa;
+    font-size: 11px;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* Компактная панель управления */
+.top-panel {
+    background: #fff;
+    padding: 4px 12px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+}
+
+.drop-zone {
+    height: 30px; /* Выравниваем по высоте с остальными кнопками */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px dashed #1a73e8;
+    padding: 0 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #1a73e8;
+    background: #f1f6ff;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: all 0.2s ease;
+    box-sizing: border-box;
+}
+
+.drop-zone:hover {
+    background: #e8f0fe;
+}
+
+.drop-zone.dragover {
+    background-color: #d2e3fc; /* Легкий, приятный синий оттенок (как при нажатии кнопок) */
+    color: #1a73e8;           /* Текст остается синим */
+    border-color: #1769d2;     /* Рамка становится чуть темнее для четкости */
+    border-style: dashed;      /* Сохраняем пунктир, это выглядит стильно */
+    box-shadow: inset 0 0 5px rgba(26, 115, 232, 0.2); /* Легкая внутренняя тень для объема */
+    transform: none;           /* Убираем увеличение, оставляем только цвет */
+}
+
+/* Контейнер таблицы */
+.table-container {
+    flex: 1;
+    overflow: auto; 
+    background: #fff;
+    border-top: 1px solid var(--border-color);
+    max-height: none !important; /* Жорстко перебиваємо ліміт Clusterize */
+    height: auto !important;     /* Дозволяємо флексбоксу розтягнути блок */
+}
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    table-layout: fixed; /* Важно для контроля ширины */
+}
+
+th {
+    background: var(--header-bg);
+    border: 1px solid #ccc;
+    padding: 5px 4px; /* Чуть увеличили отступ по вертикали для "воздуха" */
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    resize: horizontal;
+    font-weight: 600; /* Делаем шрифт чуть более четким, но не слишком жирным */
+    color: #3c4043; /* Делаем цвет текста не чисто черным, а темно-серым (как в Google Таблицах) */
+    text-align: center; /* Центрируем текст в шапке */
+}
+
+td {
+    border: 1px solid #eee;
+    padding: 1px 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    height: 18px; /* Максимальная компактность */
+}
+
+tr:nth-child(even) { background: #fafafa; }
+tr:hover { background: var(--row-hover) !important; }
+
+/* Стилизация специфических колонок */
+.col-btn { width: 30px;}
+.col-short { width: 50px; }
+.col-med { width: 70px; }
+.col-long { width: 180px; }
+.col-day { width: 16px; color: var(--primary-color); font-weight: bold; text-align: center; }
+.time-cell { font-family: 'Courier New', monospace; font-weight: bold; text-align: center; color: #444; }
+
+.status-msg { margin-left: auto; color: #666; font-style: italic; }
+
+/* Навигация */
+.tabs-nav {
+    display: flex;
+    background: #f1f3f4;
+    padding: 5px 10px 0 10px;
+    gap: 2px;
+    border-bottom: 1px solid #ccc;
+}
+.tab-btn {
+    padding: 5px 20px;
+    border: 1px solid transparent;
+    border-bottom: none;
+    background: #e0e0e0;
+    cursor: pointer;
+    font-weight: bold;
+    color: #5f6368;
+    border-radius: 8px 8px 0 0;
+    transition: all 0.2s;
+}
+.tab-btn:hover { background: #eee; }
+.tab-btn.active {
+    background: #fff;
+    color: var(--primary-color);
+    border: 1px solid #ccc;
+    border-bottom: 1px solid #fff;
+    position: relative;
+    z-index: 5;
+    margin-bottom: -1px;
+}
+
+.rings-grid {
+    padding: 20px 10px; /* Трохи зменшили бокові відступи, щоб скрол був ближче */
+    overflow-y: auto;
+    width: max-content; /* 🌟 Контейнер тепер щільно облягає картки */
+    margin: 0 auto;     /* 🌟 І сам контейнер зі скролом стає рівно по центру екрана */
+    flex: 1; 
+    box-sizing: border-box;
+}
+.ring-header {
+    display: flex;
+    justify-content: space-between;
+    border-bottom: 1px solid #eee;
+    /*padding-bottom: 5px;*/
+   /* margin-bottom: 5px;*/
+}
+
+.ring-header {
+    background: #f1f3f4;
+    padding: 4px 12px;
+    border-radius: 4px;
+    align-items: center;
+}
+
+
+.tab-content { 
+    display: none; 
+    height: calc(100vh - 80px); /* Вираховуємо висоту за вирахуванням панелей */
+    overflow: hidden; 
+    flex-direction: column;
+}
+.tab-content.active { 
+    display: flex; 
+}
+
+.mini-table {
+    /*margin-top: 10px;*/
+    max-height: 300px;
+    font-size: 11px; /* Чуть мельче, чем в основном реестре */
+}
+
+.mini-table table {
+    width: 920px; /* 🌟 Задаем жесткую ширину чуть больше суммы колонок */
+    table-layout: fixed; /* 🌟 Возвращаем жесткий контроль колонок */
+    border-collapse: collapse;
+}
+
+.mini-table th, .mini-table td {
+    padding: 1px 4px !important; /* Звужуємо відступи до мінімуму */
+    border: 1px solid #eee;
+    height: 16px; /* Висота ще менша, ніж у головному реєстрі (там 18px) */
+    font-size: 10.5px; /* Трохи зменшуємо шрифт */
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.mini-table th {
+    resize: none; /* Убираем ползунки изменения ширины */
+    text-align: center; /* Центрируем текст в шапке */
+    font-weight: bold;
+}
+
+
+.ring-card {
+    width: max-content !important; /* 🌟 Заставляем белую карточку плотно обхватить таблицу */
+    margin: 0 auto 15px auto !important; /* 🌟 Выравниваем готовую карточку ровно по центру экрана */
+    
+    display: flex;
+    flex-direction: column;
+    background: #ffffff !important;
+    border: 1px solid #9aa0a6 !important;
+    border-radius: 8px !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+}
+
+
+.top-panel select[multiple] {
+    height: 45px; /* Обмежуємо висоту списку (десь на 2-3 рядки) */
+    min-width: 100px;
+    font-size: 11px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 2px;
+    overflow-y: auto;
+}
+
+.top-panel select[multiple] option {
+    padding: 2px 4px;
+}
+
+/* Іконки фільтрів у шапці */
+.filter-icon {
+    cursor: pointer;
+    font-size: 10px;
+    color: #9aa0a6;
+    margin-left: 5px;
+    transition: color 0.2s;
+    user-select: none;
+}
+.filter-icon:hover { color: #5f6368; }
+.filter-icon.active { color: var(--primary-color); font-weight: bold; }
+
+/* Спливаюче вікно фільтра */
+.filter-popup {
+    display: none;
+    position: absolute;
+    background: #fff;
+    border: 1px solid #ccc;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 9999;
+    border-radius: 6px;
+    width: 200px;
+    font-size: 11px;
+    color: #333;
+}
+.filter-popup-header {
+    padding: 8px;
+    border-bottom: 1px solid #eee;
+    background: #f8f9fa;
+    border-radius: 6px 6px 0 0;
+    font-weight: bold;
+}
+.filter-popup-items {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 8px;
+}
+.filter-popup-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 5px;
+    cursor: pointer;
+}
+.filter-popup-actions {
+    display: flex;
+    justify-content: space-between;
+    padding: 8px;
+    border-top: 1px solid #eee;
+    background: #f8f9fa;
+    border-radius: 0 0 6px 6px;
+}
+
+
+/* Блокируем выделение текста при двойном клике в таблице */
+#table_body tr {
+    user-select: none;
+    cursor: pointer; /* Даем легкий намек, что со строкой можно взаимодействовать */
+}
+
+/* Стили для Конструктора */
+.constructor-top {
+    width: max-content; /* 🌟 Сжимаем верхнюю панель по таблице */
+    margin: 0 auto;     /* 🌟 По центру */
+    display: flex;
+    flex-direction: column;
+    border-bottom: 3px solid var(--primary-color);
+}
+
+.constructor-bottom {
+    width: max-content; /* 🌟 Сжимаем нижнюю панель по таблице */
+    margin: 0 auto;     /* 🌟 По центру */
+    display: flex;
+    flex-direction: column;
+    flex: 1; 
+    overflow: hidden;
+}
+
+.btn-add, .btn-remove {
+    height: 20px;       
+    width: 20px;        /* РОБИМО КВАДРАТ 20х20 (було 60px) */
+    padding: 0;         /* Прибираємо відступи (було 0 8px) */
+    font-size: 12px;    /* Трохи збільшуємо сам символ */
+    font-family: inherit;
+    font-weight: bold;  
+    border-radius: 3px; 
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    user-select: none;
+}
+
+.btn-add {
+    background-color: #e8f0fe; /* Легкий синий фон */
+    color: #1a73e8;           /* Синий текст */
+    border: 1px solid #1a73e8; /* Синяя граница */
+}
+.btn-add:hover {
+    background-color: #d2e3fc; /* Темнее при наведении */
+}
+.btn-add:active {
+    background-color: #b7d6f9; /* Еще темнее при нажатии */
+    border-color: #1769d2;
+}
+
+.btn-remove {
+    background-color: #fce8e6; /* Легкий красный фон */
+    color: #d93025;           /* Красный текст */
+    border: 1px solid #d93025; /* Красная граница */
+}
+.btn-remove:hover {
+    background-color: #fad2cf; /* Темнее при наведении */
+}
+.btn-remove:active {
+    background-color: #f8b4a8; /* Еще темнее при нажатии */
+    border-color: #c22b22;
+}
+/* Стили для плавающего окна Степлера */
+.floating-modal {
+    position: fixed;
+    top: 100px;
+    left: 100px;
+    width: 960px; /* Трохи ширше за таблицю */
+    max-height: 80vh;
+    background: #f8f9fa;
+    border: 1px solid #9aa0a6;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    resize: both;
+    overflow: hidden;
+}
+
+.floating-modal-header {
+    background: #e3f2fd;
+    padding: 8px 12px;
+    cursor: grab;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #ccc;
+    user-select: none;
+}
+
+.floating-modal-header:active {
+    cursor: grabbing;
+}
+
+.floating-modal-content {
+    padding: 15px;
+    overflow-y: auto;
+    flex: 1;
+    background: #e9ecef; /* Трохи темніший фон, щоб картки виділялися */
+}
+
+
+/* ========================================== */
+/* ЕДИНЫЙ СТИЛЬ ФОРМ (Инпуты, Селекты, Чекбоксы) */
+/* ========================================== */
+
+/* Текстовые, числовые поля и выпадающие списки */
+input[type="text"],
+input[type="number"],
+select {
+    height: 30px;
+    padding: 0 8px;
+    font-size: 11px;
+    font-family: inherit;
+    color: #333;
+    border: 1px solid #c0c4c9; /* Нейтральная серая рамка */
+    border-radius: 4px;        /* Такое же скругление, как у кнопок */
+    background-color: #fff;
+    transition: all 0.2s ease;
+    outline: none;
+    box-sizing: border-box;    /* Гарантирует, что рамка не увеличит высоту */
+}
+
+/* Красивая подсветка при клике (фокусе) */
+input[type="text"]:focus,
+input[type="number"]:focus,
+select:focus {
+    border-color: #1a73e8;
+    box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.2); /* Легкое синее свечение */
+}
+
+/* Чекбоксы в корпоративном синем цвете */
+input[type="checkbox"] {
+    /*accent-color: #1a73e8; /* Современный CSS, красит стандартный чекбокс */
+    accent-color:#ffffff;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    margin: 0;
+}
+
+/* Выравнивание подписей (лейблов) рядом с полями */
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 8px; /* Единый отступ между текстом и полем */
+}
+
+.control-group label {
+    margin: 0;
+    font-weight: 500;
+    color: #444;
+    white-space: nowrap;
+}
+
+
+
+/* ========================================== */
+/* ЕДИНЫЙ СТИЛЬ КНОПОК */
+/* ========================================== */
+.action-btn, .danger-btn, .success-btn {
+    height: 30px;
+    padding: 0 15px;
+    font-size: 11px;
+    font-family: inherit;
+    font-weight: 600;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    outline: none;
+    user-select: none;
+}
+
+/* Синий (Поиск / Степлер / Редактировать) */
+.action-btn {
+    background-color: #e8f0fe;
+    color: #1a73e8;
+    border: 1px solid #1a73e8;
+}
+.action-btn:hover { background-color: #d2e3fc; }
+.action-btn:active { background-color: #b7d6f9; border-color: #1769d2; }
+
+/* Зеленый (Затвердити / Зберегти) */
+.success-btn {
+    background-color: #e6f4ea;
+    color: #1e8e3e;
+    border: 1px solid #1e8e3e;
+}
+.success-btn:hover { background-color: #c6efd9; }
+.success-btn:active { background-color: #a9e2c1; border-color: #1a8039; }
+
+/* Красный (Видалити / Очистити / Скасувати) */
+.danger-btn {
+    background-color: #fce8e6;
+    color: #d93025;
+    border: 1px solid #d93025;
+}
+.danger-btn:hover { background-color: #fad2cf; }
+.danger-btn:active { background-color: #f8b4a8; border-color: #c22b22; }
+
+
+
+
+/* ========================================== */
+/* ВОГНЯНИЙ ЕФЕКТ ДЛЯ КНОПКИ ЗУПИНКИ          */
+/* ========================================== */
+
+@keyframes fire-pulse {
+    0% {
+        box-shadow: 0 0 5px #ff5722, 0 0 15px #ff5722, inset 0 0 5px #ff5722;
+        background-color: #d93025;
+        color: white;
+        border-color: #ff5722;
+        transform: scale(1);
+    }
+    50% {
+        box-shadow: 0 0 15px #ff9800, 0 0 30px #ff5722, inset 0 0 10px #ff9800;
+        background-color: #ff3d00;
+        color: white;
+        border-color: #ff9800;
+        transform: scale(1.03); /* Ледь помітне збільшення (дихання) */
+    }
+    100% {
+        box-shadow: 0 0 5px #ff5722, 0 0 15px #ff5722, inset 0 0 5px #ff5722;
+        background-color: #d93025;
+        color: white;
+        border-color: #ff5722;
+        transform: scale(1);
+    }
+}
+
+#btn_stop_algo {
+    animation: fire-pulse 2s infinite; /* Нескінченна анімація, поки кнопка видима */
+    /*font-weight: bold;*/
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5); /* Щоб текст краще читався на яскравому фоні */
+    transition: none; /* Відключаємо стандартні переходи, бо ними керує keyframes */
+}
+
+/* При наведенні робимо "вогонь" ще гарячішим */
+#btn_stop_algo:hover {
+    animation-duration: 0.5s; /* Пульсує вдвічі швидше */
+    cursor: pointer;
+}
+
+
+/* ========================================== */
+/* СТИЛІ ДЛЯ САЙДБАРУ СТАТИСТИКИ (АРХІВ)      */
+/* ========================================== */
+.archive-layout {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    overflow: hidden; /* Скрол буде всередині колонок */
+    width: 100%;
+}
+
+.archive-sidebar {
+    width: 220px;
+    background: #fff;
+    border-right: 1px solid var(--border-color);
+    padding: 15px;
+    height: 100%;
+    overflow-y: auto;
+    flex-shrink: 0;
+    box-sizing: border-box;
+    box-shadow: 2px 0 5px rgba(0,0,0,0.02);
+}
+
+.archive-sidebar h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: var(--primary-color);
+    font-size: 13px;
+    text-transform: uppercase;
+    border-bottom: 2px solid #e8f0fe;
+    padding-bottom: 8px;
+}
+
+.stat-item {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 12px;
+    font-size: 12px;
+    color: #444;
+}
+
+.stat-divider {
+    height: 1px;
+    background: #eee;
+    margin: 15px 0;
+}
+
+.stat-item.highlight {
+    font-size: 13px;
+    font-weight: bold;
+    color: #1e8e3e;
+    background: #e6f4ea;
+    padding: 8px;
+    border-radius: 6px;
+    margin-top: 10px;
+    border: 1px solid #c6efd9;
+}
+
+/* Перевизначаємо ширину сітки кілець, щоб вона займала решту місця біля сайдбару */
+#archive-tab .rings-grid {
+    flex: 1;
+    width: 100%;
+}
+
+
+
+
+
+

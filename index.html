@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Кольцмейстер</title>
+    <link rel="icon" type="image/png" href="logo.png?v=2">
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/clusterize.js/0.19.0/clusterize.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/clusterize.js/0.19.0/clusterize.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+    <div class="top-panel">
+        <div id="drop_zone" class="drop-zone">📂 Тягни файл сюди</div>
+        <input type="file" id="file_input" style="display:none" accept=".xlsx">
+        <a href="https://docs.google.com/spreadsheets/d/1l9xS6gP40uBfc8LYdA0rhZmyW749w3ICFRdR9W77ZvY/edit?usp=sharing" target="_blank" class="action-btn" style="text-decoration: none;">⚙️ Налаштування</a>
+        <div id="status" class="status-msg">Очікування довідника...</div>
+    </div>
+
+    <div class="tabs-nav">
+        <button class="tab-btn active" onclick="switchTab('register-tab')">📊 Графіки</button>
+        <button class="tab-btn" onclick="switchTab('draft-tab')">📝 Пошук кілець</button>
+        <button class="tab-btn" id="constructor-tab-btn" onclick="switchTab('constructor-tab')" style="display:none;">🛠 Конструктор</button>
+        <button class="tab-btn" id="stapler-tab-btn" onclick="switchTab('stapler-draft-tab')" style="display: none; color: #6f42c1;">🧷 Автостеплер</button>
+        <button class="tab-btn" onclick="switchTab('archive-tab')">📦 Затверджені кільця</button>
+    </div>
+
+    <div id="register-tab" class="tab-content active">
+        <div class="control-bar" style="background: #fff; padding: 5px 15px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center;">
+            <button onclick="clearFilters()" class="danger-btn" style="height: 26px;">❌ Скинути фільтри</button>
+        </div>
+        <div class="table-container clusterize-scroll" id="scrollArea">
+            <table id="main_table">
+                <thead>
+                    <tr>
+                        <th class="col-med">GRF</th>
+                        <th class="col-short">Цифра</th>
+                        <th class="col-short">Код</th>
+                        <th class="col-med">Група</th>
+                        <th class="col-med">Наряд</th>
+                        <th class="col-med">Тип <span class="filter-icon" data-col="type" onclick="openFilter(event, 'type')">▼</span></th>
+                        <th class="col-short">Авто <span class="filter-icon" data-col="auto" onclick="openFilter(event, 'auto')">▼</span></th>
+                        <th class="col-btn">ФЗ</th>
+                        <th class="col-long">Маршрут</th>
+                        <th class="col-med">Відпр <span class="filter-icon" data-col="origin" onclick="openFilter(event, 'origin')">▼</span></th>
+                        <th class="col-med">Отр <span class="filter-icon" data-col="dest" onclick="openFilter(event, 'dest')">▼</span></th>
+                        <th class="col-day">Пн</th>
+                        <th class="col-day">Вт</th>
+                        <th class="col-day">Ср</th>
+                        <th class="col-day">Чт</th>
+                        <th class="col-day">Пт</th>
+                        <th class="col-day">Сб</th>
+                        <th class="col-day">Нд</th>
+                        <th class="col-short">Водії</th>
+                        <th class="col-short">Дедл</th>
+                        <th class="col-short">Подача</th>
+                        <th class="col-short">Виїзд</th>
+                        <th class="col-short">Приїзд</th>
+                        <th class="col-short">Вільний</th>
+                        <th>Комент</th>
+                    </tr>
+                </thead>
+                <tbody id="table_body" class="clusterize-content">
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="draft-tab" class="tab-content">
+        <div class="control-bar" style="background: #fff; padding: 8px 15px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: flex-start; gap: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+
+            <div style="display: flex; flex-direction: column; gap: 6px; flex: 0 1 auto;">
+
+                <div style="display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 6px 12px; border-radius: 6px; border: 1px solid #e0e0e0;">
+                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
+                        <div class="control-group">
+                            <label>Режим кільцювання:</label>
+                            <select id="mode_select">
+                                <option value="node">Вузлом</option>
+                                <option value="city">Містом</option>
+                                <option value="city2">Локацією</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label>Алгоритм:</label>
+                            <select id="algo_strategy">
+                                <option value="fifo">FIFO</option>
+                                <option value="filo">FILO</option>
+                                <option value="tree_opt">Швидке дерево (Оптимізоване)</option>
+                                <option value="tree">Глобальне дерево</option>
+                            </select>
+                        </div>
+                        <div class="control-group">
+                            <label>Перепарковка (хв):</label>
+                            <input type="number" id="repark_time" value="30" style="width: 50px;">
+                        </div>
+                        <div class="control-group">
+                            <label>Мін. графіків:</label>
+                            <input type="number" id="min_trips" value="4" style="width: 40px;">
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px; flex-shrink: 0; margin-left: 15px;">
+                        <button onclick="runShuttleAlgo()" id="btn_run_algo" class="action-btn">🚀 Знайти кільця</button>
+                        <button onclick="stopAlgo()" id="btn_stop_algo" class="danger-btn" style="display:none;">🛑 Зупинити пошук</button>
+                    </div>
+                </div>
+
+                <div style="display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 6px 12px; border-radius: 6px; border: 1px solid #e0e0e0;">
+                    <div style="display: flex; gap: 15px; align-items: center;">
+
+                        <div class="control-group">
+                            <label>Режим кільцювання:</label>
+                            <select id="pattern_mode_select">
+                                <option value="node">Вузлом</option>
+                                <option value="city">Містом</option>
+                                <option value="city2">Локацією</option>
+                            </select>
+                        </div>
+
+                        <div class="control-group">
+                            <label><strong>Шаблон:</strong></label>
+                            <input type="text" id="pattern_input" placeholder="Київ - Полтава - Дніпро" style="width: 280px;">
+                        </div>
+                        <div class="control-group" style="flex-direction: row; align-items: center; gap: 5px;">
+                            <input type="checkbox" id="pattern_return" checked>
+                            <label for="pattern_return" style="margin: 0; cursor: pointer;" title="Замкнути кільце у місті старту">З поверненням</label>
+                        </div>
+                    </div>
+                    <div style="display: flex; flex-shrink: 0; margin-left: 15px;">
+                        <button onclick="runPatternAlgo()" class="action-btn">🔍 Шукати за шаблоном</button>
+                    </div>
+                </div>
+
+            </div>
+
+            <div id="draft-actions" style="display: flex; flex-direction: row; gap: 10px; flex-shrink: 0; align-items: center;">
+                
+                <div style="font-size: 12px; font-weight: 600; color: #5f6368; background: #e8f0fe; padding: 5px 10px; border-radius: 4px; border: 1px solid #d2e3fc;">
+                    Знайдено: <strong id="draft-count-badge" style="color: #1a73e8; font-size: 14px;">0</strong>
+                </div>
+
+                <button onclick="approveAllRings()" class="success-btn">✔ Затвердити всі</button>
+                <button onclick="clearDraft()" class="danger-btn">🗑️ Очистити</button>
+            </div>
+
+        </div>
+
+        <div id="draft-scroll" class="rings-grid">
+            <div id="draft-content">
+                <div class="empty-msg">Тут з'являться запропоновані кільця після запуску алгоритму</div>
+            </div>
+            <div id="draft-sentinel" style="height: 10px;"></div>
+        </div>
+    </div>
+    <div id="archive-tab" class="tab-content">
+        <div class="control-bar" style="background: #fff; padding: 10px 15px; border-bottom: 1px solid var(--border-color); display: flex; gap: 15px; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <div class="control-group">
+                <label>Макс. очікування (год):</label>
+                <input type="number" id="stapler_max_wait" value="24" style="width: 50px;">
+            </div>
+            <div class="control-group">
+                <label>Макс. днів наряду:</label>
+                <input type="number" id="stapler_max_days" value="6" style="width: 50px;">
+            </div>
+            <button onclick="runAutoStapler()" class="action-btn">🧷 Запустити Автостеплер</button>
+            <button onclick="assignRingNames()" class="action-btn" id="btn_name_rings">🏷️ Дати імена кільцям</button>
+            <button onclick="extendApprovedRings()" class="action-btn" style="background-color: #e8f0fe; color: #1a73e8;">🔄 Докільцювати</button>
+            <div class="control-group" style="margin-left: 15px; border-left: 1px solid #ccc; padding-left: 15px;">
+                <label>🔍 Пошук:</label>
+                <input type="text" id="archive_search" placeholder="Номер кільця..." style="width: 140px;" oninput="renderArchive()">
+            </div>
+            <button onclick="exportToExcel()" class="success-btn" style="margin-left: auto;">💾 Експорт в Excel</button>
+        </div>
+        
+        <div class="archive-layout">
+            <div class="archive-sidebar">
+                <h3>📊 Статистика кілець</h3>
+                <div class="stat-item">Всього кілець: <strong id="stat-total-rings">0</strong></div>
+                <div class="stat-item">Кільця БДФ: <strong id="stat-bdf-rings" style="color: #1e8e3e;">0</strong></div>
+                <div class="stat-item">Інші авто: <strong id="stat-other-rings">0</strong></div>
+                <div class="stat-divider"></div>
+                <div class="stat-item">Всього графіків: <strong id="stat-total-trips">0</strong></div>
+                <div class="stat-item">У кільцях: <strong id="stat-ringed-trips">0</strong></div>
+                <div class="stat-item highlight">Кільцювання: <strong id="stat-percent">0%</strong></div>
+            </div>
+
+            <div id="archive-scroll" class="rings-grid">
+                <div id="archive-content">
+                    <div class="empty-msg">Тут будуть ваші затверджені наряди</div>
+                </div>
+                <div id="archive-sentinel" style="height: 10px;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="constructor-tab" class="tab-content">
+        <div class="constructor-top">
+            <div class="ring-header" style="background: #e3f2fd;">
+                <strong>🛠 Поточне кільце (збірка)</strong>
+                <div style="gap: 10px; display: flex;">
+                    <button class="success-btn" onclick="saveConstructorRing()">💾 Зберегти кільце</button>
+                    <button class="danger-btn" onclick="cancelConstructor()">❌ Скасувати</button>
+                </div>
+            </div>
+            <div class="table-container mini-table" style="max-height: 200px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-btn">Дія</th>
+                            <th class="col-short">GRF</th>
+                            <th class="col-med">Тип</th>
+                            <th class="col-btn">ФЗ</th>
+                            <th class="col-long">Маршрут</th>
+                            <th class="col-med">Відпр</th><th class="col-med">Отр</th>
+                            <th class="col-day">Пн</th><th class="col-day">Вт</th><th class="col-day">Ср</th>
+                            <th class="col-day">Чт</th><th class="col-day">Пт</th><th class="col-day">Сб</th><th class="col-day">Нд</th>
+                            <th class="col-short">Подача</th>
+                            <th class="col-short">Виїзд</th>
+                            <th class="col-short">Приїзд</th>
+                            <th class="col-short">Вільний</th>
+                        </tr>
+                    </thead>
+                    <tbody id="constructor-current-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="constructor-bottom">
+            <div class="ring-header" style="background: #fff59d; margin-top: 10px;">
+                <strong>⬇️ Доступні продовження (з урахуванням перепарковки)</strong>
+            </div>
+            <div class="table-container mini-table" style="flex: 1;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-btn">Дія</th>
+                            <th class="col-short">GRF</th>
+                            <th class="col-med">Тип</th>
+                            <th class="col-btn">ФЗ</th>
+                            <th class="col-long">Маршрут</th>
+                            <th class="col-med">Відпр</th><th class="col-med">Отр</th>
+                            <th class="col-day">Пн</th><th class="col-day">Вт</th><th class="col-day">Ср</th>
+                            <th class="col-day">Чт</th><th class="col-day">Пт</th><th class="col-day">Сб</th><th class="col-day">Нд</th>
+                            <th class="col-short">Подача</th>
+                            <th class="col-short">Виїзд</th>
+                            <th class="col-short">Приїзд</th>
+                            <th class="col-short">Вільний</th>
+                        </tr>
+                    </thead>
+                    <tbody id="constructor-candidates-body">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="stapler-draft-tab" class="tab-content">
+        <div class="pattern-panel" style="background: #fff; padding: 10px 15px; border-bottom: 1px solid var(--border-color); display: flex; gap: 15px; align-items: center; justify-content: flex-end; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+            <button onclick="approveAllStapler()" class="success-btn">✔ Затвердити всі збірки</button>
+            <button onclick="rejectAllStapler()" class="danger-btn">❌ Скасувати всі</button>
+        </div>
+        <div id="stapler-draft-scroll" class="rings-grid">
+            <div id="stapler-draft-content">
+                <div class="empty-msg">Тут з'являться запропоновані збірки від Автостеплера</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="filter-popup" class="filter-popup">
+        <div class="filter-popup-header">
+            <input type="checkbox" id="filter-select-all" onclick="toggleAllFilterItems(this)">
+            <label for="filter-select-all">Вибрати всі</label>
+        </div>
+        <div id="filter-popup-items" class="filter-popup-items"></div>
+        <div class="filter-popup-actions">
+            <button class="action-btn" onclick="applyPopupFilter()" style="padding: 2px 10px;">Застосувати</button>
+            <button class="danger-btn" onclick="clearPopupFilter()" style="padding: 2px 10px;">Скинути</button>
+        </div>
+    </div>
+
+    <div id="stapler-modal" class="floating-modal" style="display:none;">
+        <div id="stapler-header" class="floating-modal-header">
+            <strong>📎 Степлер: Вибір пари</strong>
+            <button class="danger-btn" onclick="closeStapler()" style="padding: 2px 6px;">❌</button>
+        </div>
+        <div id="stapler-content" class="floating-modal-content rings-grid">
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>

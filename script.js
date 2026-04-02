@@ -1,0 +1,2235 @@
+// 1. Константы и настройки
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtRtzMPV6OykBEJ5OoPNYDhW0Tp1FXaAsMzfMthqL7nj8J3Jke2jdj7dzRL46kTKcO/exec';
+let nodeDictionary = new Map();
+window.allTrips = []; // Основное хранилище данных
+window.ringNamesMap = {};
+
+const MATRIX_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtRtzMPV6OykBEJ5OoPNYDhW0Tp1FXaAsMzfMthqL7nj8J3Jke2jdj7dzRL46kTKcO/exec?action=matrix';
+
+// ==========================================
+// СКРОЛЛ ДЛЯ ЧИСЛОВИХ ПОЛІВ (Зміна значень коліщатком)
+// ==========================================
+['repark_time', 'min_trips', 'stapler_max_wait', 'stapler_max_days'].forEach(id => {
+    const input = document.getElementById(id);
+    if (input) {
+        input.addEventListener('wheel', function(e) {
+            // Забороняємо прокрутку всієї сторінки, поки миша над полем
+            e.preventDefault(); 
+            
+            let val = parseInt(this.value) || 0;
+            
+            // e.deltaY < 0 означає скролл коліщатком вгору
+            if (e.deltaY < 0) {
+                val += 1;
+            } else {
+                val -= 1;
+            }
+            
+            // Захист від від'ємних значень (щоб не скрутили перепарковку в мінус)
+            if (val < 0) val = 0;
+            
+            this.value = val;
+            
+            // Штучно викликаємо подію 'change'.
+            // Оскільки в тебе вже висить слухач на зміну repark_time, 
+            // таблиця буде миттєво перемальовуватись прямо під час скролу!
+            this.dispatchEvent(new Event('change'));
+        });
+    }
+});
+
+
+async function assignRingNames() {
+    const btn = document.getElementById('btn_name_rings');
+    btn.innerText = "⏳ Отримуємо матрицю...";
+    btn.disabled = true;
+
+    try {
+        // 1. Завантажуємо матрицю
+        const response = await fetch(MATRIX_WEB_APP_URL);
+        const matrixArray = await response.json();
+        
+        // Перетворюємо масив у зручний словник: lookup["Чернігів_Черкаси"] = "1011"
+        const matrixLookup = {};
+        matrixArray.forEach(item => {
+            const key = `${String(item.origin).trim().toLowerCase()}_${String(item.dest).trim().toLowerCase()}`;
+            matrixLookup[key] = item.code;
+        });
+
+        // 2. Збираємо всі затверджені кільця
+        const archiveMap = {};
+        window.allTrips.forEach(t => {
+            if (t.ringId && t.ringId.startsWith('approved_')) {
+                if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+                archiveMap[t.ringId].push(t);
+            }
+        });
+
+        const rings = Object.values(archiveMap);
+        if (rings.length === 0) {
+            alert("Немає затверджених кілець для іменування.");
+            return;
+        }
+
+        // 3. Лічильник для однакових кодів (щоб робити 01, 02, 03)
+        const codeCounters = {};
+
+        // 4. Проходимося по кожному кільцю і даємо йому ім'я
+        rings.forEach(ring => {
+            const rId = ring[0].ringId;
+            
+            // Сортуємо графіки хронологічно, щоб точно знайти ПЕРШИЙ рейс
+            ring.sort((a, b) => {
+                if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+                return a.trueStart - b.trueStart;
+            });
+
+            const firstTrip = ring[0];
+            
+            // Беремо базове місто (без уточнень локацій), оскільки матриця по містах
+            const originCity = firstTrip.originData.city.trim().toLowerCase();
+            const destCity = firstTrip.destData.city.trim().toLowerCase();
+            const lookupKey = `${originCity}_${destCity}`;
+
+            // Шукаємо код
+            let baseCode = matrixLookup[lookupKey];
+            
+            if (!baseCode) {
+                baseCode = "XXXX"; // Якщо маршрут не знайдено в матриці
+            }
+
+            // Рахуємо, яке це по рахунку кільце з таким кодом
+            if (!codeCounters[baseCode]) codeCounters[baseCode] = 0;
+            codeCounters[baseCode]++;
+
+            // Форматуємо порядковий номер (додаємо нуль спереду, якщо число < 10)
+            const sequenceNum = String(codeCounters[baseCode]).padStart(2, '0');
+
+            // Записуємо готове ім'я
+            window.ringNamesMap[rId] = `${baseCode}_${sequenceNum}`;
+        });
+
+        // Перемальовуємо архів, щоб показати нові імена
+        renderArchive();
+        
+    } catch (e) {
+        console.error("Помилка іменування:", e);
+        alert("Помилка завантаження матриці. Перевірте URL та консоль.");
+    } finally {
+        btn.innerText = "🏷️ Дати імена кільцям";
+        btn.disabled = false;
+    }
+}
+
+
+// 2. Элементы интерфейса (всегда объявляем в самом начале!)
+const modeSelect = document.getElementById('mode_select');
+const reparkInput = document.getElementById('repark_time');
+//const filterFrom = document.getElementById('filter_from');
+//const filterTo = document.getElementById('filter_to');
+//const filterAuto = document.getElementById('filter_auto'); // НОВЕ
+//const filterType = document.getElementById('filter_type'); // НОВЕ
+const activeFilters = { origin: new Set(), dest: new Set(), auto: new Set(), type: new Set() };
+let currentFilterColumn = null; // Зберігає інформацію, який фільтр зараз відкритий
+
+const fileInput = document.getElementById('file_input');
+const dropZone = document.getElementById('drop_zone');
+const tableBody = document.getElementById('table_body');
+const status = document.getElementById('status');
+const minTripsInput = document.getElementById('min_trips');
+let clusterizeInstance = null;
+//let clusterizeDraft = null;   // Добавить это
+//let clusterizeArchive = null; // Добавить это
+
+// Змінні для нескінченного скроллу
+let draftCardsHTML = [];
+let archiveCardsHTML = [];
+let draftRenderedCount = 0;
+let archiveRenderedCount = 0;
+const CARDS_PER_PAGE = 20; // Скільки карток підвантажувати за раз
+let draftObserver = null;
+let archiveObserver = null;
+
+
+let isAlgoRunning = false; // Флаг роботи алгоритму
+
+function stopAlgo() {
+    isAlgoRunning = false;
+    //status.innerText = `Доступно графіків: ${filtered.length} (всього завантажено: ${trips.length})`;
+    //document.getElementById('status').innerText = "Пошук перервано користувачем...";
+}
+
+// 3. Слушатели событий
+// Если меняется любой фильтр или режим — перерисовываем
+[reparkInput].forEach(el => {
+    el.addEventListener('change', () => {
+        render(window.allTrips);
+    });
+});
+
+
+// Загрузка справочника
+async function loadDictionary() {
+    status.innerText = "Завантаження довідника вузлів...";
+    try {
+        const response = await fetch(WEB_APP_URL);
+        const data = await response.json();
+        nodeDictionary.clear();
+        data.forEach(item => {
+            nodeDictionary.set(String(item.node).trim(), {
+                city: item.city,
+                city2: item.city2
+            });
+        });
+        status.innerText = `Довідник завантажено (${nodeDictionary.size} вузлів)`;
+    } catch (e) {
+        console.error("Помилка API:", e);
+        status.innerText = "Помилка довідника (див. консоль)";
+    }
+}
+
+// Класс данных рейса
+class Trip {
+    constructor(r) {
+        this.rawRow = [...r];
+        this.id = 'trip_' + Math.random().toString(36).substr(2, 9); // НОВОЕ: Уникальный ID
+        this.grf = r[2]; this.digit = r[3]; this.code = r[4]; this.group = r[5];
+        this.naryad = r[6]; this.type = r[7]; this.auto = r[8]; this.load = r[9];
+        this.route = r[10]; this.origin = String(r[11] || "").trim();
+        this.destination = String(r[15] || "").trim();
+
+        this.originData = nodeDictionary.get(this.origin) || { city: this.origin, city2: this.origin };
+        this.destData = nodeDictionary.get(this.destination) || { city: this.destination, city2: this.destination };
+
+        const astroDays = [r[16], r[17], r[18], r[19], r[20], r[21], r[22]];
+        this.dayIndex = astroDays.findIndex(d => d === '+');
+        if (this.dayIndex === -1) this.dayIndex = 0;
+
+        this.logDays = [r[23], r[24], r[25], r[26], r[27], r[28], r[29]];
+        this.logisticDay = this.logDays.findIndex(d=>d==="+");
+        if (this.logisticDay === -1) this.logisticDay = 0;
+
+        this.drivers = r[30]; this.deadline = r[31];
+        
+        this.podachaStr = formatTime(r[32]);
+        this.depStr = formatTime(r[33]);
+        this.arrStr = formatTime(r[40]);
+        this.freeStr = formatTime(r[41]);
+
+        this.calculateTimeline();
+        this.calculateTrueTimes();
+        this.comment = r[54];
+        this.ringId = null;
+        this.originalRingId = null; // НОВИЙ РЯДОК: Пам'ять для автостеплера
+    }
+
+    calculateTrueTimes() {
+        const isBDF = String(this.auto || "").toUpperCase().includes("БДФ");
+        this.trueStart = isBDF ? this.depInt : this.podachaInt;
+        this.trueEnd = isBDF ? this.arrInt : this.freeInt;
+
+        // Если логистический день - Воскресенье (индекс 6), 
+        // а астрономическое время выезда упало на Понедельник (trueStart < 1440 минут)
+        if (this.logisticDay === 6 && this.trueStart < 1440) {
+            this.trueStart += 10080; // Переносим на условный "8-й день"
+        }
+
+        // Обязательная страховка: если финиш оказался раньше старта, 
+        // перекидываем его вслед за стартом на следующую неделю
+        if (this.trueEnd < this.trueStart) {
+            this.trueEnd += 10080;
+        }
+    }
+
+    calculateTimeline() {
+        const minInDay = 1440; const minInWeek = 10080;
+        const dayStart = this.dayIndex * minInDay;
+        const toMin = (str) => {
+            if (!str) return 0;
+            const [h, m] = str.split(':').map(Number);
+            return (h * 60) + m;
+        };
+        const dM = toMin(this.depStr);
+        this.depInt = dayStart + dM;
+        let pM = toMin(this.podachaStr);
+        let pInt = dayStart + pM;
+        if (pM > dM) pInt -= minInDay;
+        this.podachaInt = pInt < 0 ? pInt + minInWeek : pInt;
+        let aM = toMin(this.arrStr);
+        let aInt = dayStart + aM;
+        if (aM < dM) aInt += minInDay;
+        this.arrInt = aInt >= minInWeek ? aInt - minInWeek : aInt;
+        let fM = toMin(this.freeStr);
+        let fInt = dayStart + fM;
+        if (fM < aM) fInt = aInt + (fM + minInDay - aM);
+        else if (aInt > (dayStart + minInDay)) fInt += minInDay;
+        this.freeInt = fInt >= minInWeek ? fInt - minInWeek : fInt;
+    }
+
+    getPointName(point, mode) {
+        const data = point === 'origin' ? this.originData : this.destData;
+        if (mode === 'city') return data.city;
+        if (mode === 'city2') return data.city2;
+        return point === 'origin' ? this.origin : this.destination;
+    }
+}
+
+// Вспомогательные функции
+function formatTime(val) {
+    if (val == null || val === "") return "";
+    if (typeof val === 'number') {
+        const totalMins = Math.round(val * 1440);
+        return `${Math.floor(totalMins/60).toString().padStart(2,'0')}:${(totalMins%60).toString().padStart(2,'0')}`;
+    }
+    return val.toString().trim().substring(0, 5);
+}
+
+
+function clearFilters() {
+    // Очищаємо всі масиви вибраних значень
+    activeFilters.origin.clear();
+    activeFilters.dest.clear();
+    activeFilters.auto.clear();
+    activeFilters.type.clear();
+    
+    // Скидаємо колір іконок і перемальовуємо таблицю
+    updateFilterIcons();
+    render(window.allTrips);
+}
+
+// Загрузка файла
+function handleFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = e => {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+        
+        // НОВЕ: Зберігаємо перші 4 рядки шапки (щоб при експортуванні відновити структуру)
+        window.originalHeaders = rows.slice(0, 4);
+
+        // Далі йде твоє сортування і маппінг...
+        window.allTrips = rows.slice(4).filter(r => r[2]).map(r => new Trip(r));
+        window.allTrips.sort((a, b) => {
+            if (a.trueStart !== b.trueStart) {
+                return a.trueStart - b.trueStart;
+            }
+            return a.logisticDay - b.logisticDay;
+        });
+        
+        render(window.allTrips);
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// Рендер таблицы с виртуальным скроллом
+function render(trips) {
+    const mode = modeSelect.value;
+    const reparkMinutes = parseInt(reparkInput.value) || 0;
+
+    const fromVals = Array.from(activeFilters.origin);
+    const toVals = Array.from(activeFilters.dest);
+    const autoVals = Array.from(activeFilters.auto);
+    const typeVals = Array.from(activeFilters.type);
+
+    // Фільтруємо: ТІЛЬКИ вільні графіки
+    const filtered = trips.filter(t => {
+        if (t.ringId !== null) return false; 
+        
+        const originName = t.origin;
+        const destName = t.destination;
+
+        // Логіка для напрямків (А->Б або Б->А) з масивами
+        let matchDirection = true;
+        if (fromVals.length > 0 && toVals.length > 0) {
+            const straight = fromVals.includes(originName) && toVals.includes(destName);
+            const reverse = toVals.includes(originName) && fromVals.includes(destName);
+            matchDirection = straight || reverse;
+        } else if (fromVals.length > 0) {
+            matchDirection = fromVals.includes(originName);
+        } else if (toVals.length > 0) {
+            matchDirection = toVals.includes(destName);
+        }
+
+        if (!matchDirection) return false;
+
+        // Логіка для нових фільтрів
+        if (autoVals.length > 0 && !autoVals.includes(t.auto)) return false;
+        if (typeVals.length > 0 && !typeVals.includes(t.type)) return false;
+
+        return true; 
+    });
+
+    const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Нд'];
+    
+    // Формуємо масив HTML-рядків (кожен <tr> — окремий елемент масиву)
+    const rowsData = filtered.map(t => {
+        const finalTrueEnd = t.trueEnd + reparkMinutes;
+        
+        return `<tr data-id="${t.id}" title="Логістичний день: ${dayNames[t.logisticDay]}">
+            <td>${t.grf || ''}</td><td>${t.digit || ''}</td><td>${t.code || ''}</td>
+            <td>${t.group || ''}</td><td>${t.naryad || ''}</td><td>${t.type || ''}</td>
+            <td>${t.auto || ''}</td><td>${t.load || ''}</td><td title="${t.route || ''}">${t.route || ''}</td>
+            <td class="highlight-node">${t.origin}</td>
+            <td class="highlight-node">${t.destination}</td>
+            ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+            <td>${t.drivers || ''}</td><td>${t.deadline || ''}</td>
+            <td class="time-cell">${t.podachaStr}</td>
+            <td class="time-cell" style="color: #1a73e8;">${t.depStr}</td>
+            <td class="time-cell">${t.arrStr}</td><td class="time-cell">${t.freeStr}</td>
+            <td title="${t.comment || ''}">${t.comment || ''}</td>
+        </tr>`;
+    });
+
+    // Якщо скролл ще не створений — ініціалізуємо його
+    if (!clusterizeInstance) {
+        clusterizeInstance = new Clusterize({
+            rows: rowsData,
+            scrollId: 'scrollArea',
+            contentId: 'table_body',
+            no_data_text: 'Немає даних для відображення'
+        });
+    } else {
+        // Якщо вже створений — просто оновлюємо дані (працює миттєво)
+        clusterizeInstance.update(rowsData);
+    }
+    
+    status.innerText = `Доступно графіків: ${filtered.length} (всього завантажено: ${trips.length})`;
+}
+
+// Инициализация Drag and Drop
+['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+});
+
+let dragCounter = 0;
+
+dropZone.addEventListener('dragenter', e => {
+    dragCounter++;
+    dropZone.classList.add('dragover');
+});
+
+dropZone.addEventListener('dragover', e => {
+    if (!dropZone.classList.contains('dragover')) {
+        dropZone.classList.add('dragover');
+    }
+});
+
+dropZone.addEventListener('dragleave', e => {
+    dragCounter--;
+    if (dragCounter === 0) {
+        dropZone.classList.remove('dragover');
+    }
+});
+
+
+
+
+dropZone.onclick = () => fileInput.click();
+fileInput.onchange = e => handleFile(e.target.files[0]);
+dropZone.addEventListener('drop', e => {
+    // Гарантированно убираем класс и сбрасываем счетчик
+    dragCounter = 0;
+    dropZone.classList.remove('dragover');
+    
+    handleFile(e.dataTransfer.files[0]);
+});
+
+
+// Переключение вкладок
+function switchTab(tabId) {
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    
+    document.getElementById(tabId).classList.add('active');
+    
+    // Знаходимо кнопку, на яку натиснули, за текстом або атрибутом
+    const targetBtn = Array.from(document.querySelectorAll('.tab-btn')).find(b => b.getAttribute('onclick').includes(tabId));
+    if (targetBtn) targetBtn.classList.add('active');
+    
+    document.getElementById('draft-actions').style.display = (tabId === 'draft-tab') ? 'flex' : 'none';
+    
+    // Перемальовуємо дані при переході
+    if (tabId === 'register-tab') render(window.allTrips);
+    if (tabId === 'draft-tab') renderDraft();
+    if (tabId === 'archive-tab') renderArchive();
+    if (tabId === 'stapler-draft-tab') renderStaplerDraft(); // НОВИЙ РЯДОК
+}
+
+
+async function runShuttleAlgo() {
+    const mode = modeSelect.value;
+    const repark = parseInt(reparkInput.value) || 0;
+    const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
+    const strategy = document.getElementById('algo_strategy')?.value || 'fifo';
+    //const fromVal = filterFrom.value;
+    //const toVal = filterTo.value;
+
+    window.allTrips.forEach(t => { 
+        if(t.ringId && t.ringId.startsWith('draft_')) t.ringId = null; 
+    });
+
+    const fromVals = Array.from(activeFilters.origin);
+    const toVals = Array.from(activeFilters.dest);
+    const autoVals = Array.from(activeFilters.auto);
+    const typeVals = Array.from(activeFilters.type);
+
+    const workingTrips = window.allTrips.filter(t => {
+        const originName = t.getPointName('origin', mode);
+        const destName = t.getPointName('dest', mode);
+        
+        let matchDirection = true;
+        if (fromVals.length > 0 && toVals.length > 0) {
+            const straight = fromVals.includes(originName) && toVals.includes(destName);
+            const reverse = toVals.includes(originName) && fromVals.includes(destName);
+            matchDirection = straight || reverse;
+        } else if (fromVals.length > 0) {
+            matchDirection = fromVals.includes(originName);
+        } else if (toVals.length > 0) {
+            matchDirection = toVals.includes(destName);
+        }
+
+        if (!matchDirection) return false;
+
+        if (autoVals.length > 0 && !autoVals.includes(t.auto)) return false;
+        if (typeVals.length > 0 && !typeVals.includes(t.type)) return false;
+
+        return true;
+    });
+
+    // Вмикаємо режим роботи
+    isAlgoRunning = true;
+    const btnRun = document.getElementById('btn_run_algo');
+    const btnStop = document.getElementById('btn_stop_algo');
+    
+    if (btnRun && btnStop) {
+        btnRun.style.display = 'none';
+        btnStop.style.display = 'inline-block';
+    }
+
+    try {
+        if (strategy === 'fifo') {
+            algoFIFO(workingTrips, mode, repark, minTrips);
+        } else if (strategy === 'filo') {
+            algoFILO(workingTrips, mode, repark, minTrips);
+        } else if (strategy === 'tree') {
+            switchTab('draft-tab'); 
+            await algoTree(workingTrips, mode, repark, minTrips);
+        } else if (strategy === 'tree_opt') { // ДОДАЄМО ЦЮ ГІЛКУ
+            switchTab('draft-tab'); 
+            await algoTreeOptimized(workingTrips, mode, repark, minTrips);
+        }
+    } finally {
+        // Гарантовано повертаємо кнопки у початковий стан, навіть якщо була помилка або зупинка
+        isAlgoRunning = false;
+        if (btnRun && btnStop) {
+            btnRun.style.display = 'inline-block';
+            btnStop.style.display = 'none';
+        }
+        renderDraft();
+        switchTab('draft-tab');
+        render(window.allTrips);
+        //document.getElementById('status').innerText = "Пошук завершено.";
+        //document.getElementById('status').innerText = `Доступно графіків: ${filtered.length} (всього завантажено: ${trips.length})`;
+       
+    }
+}
+
+// --- АЛГОРИТМ 1: FIFO (Швидкий човник А-Б-А) ---
+function algoFIFO(workingTrips, mode, repark, minTrips) {
+    let ringCounter = 0;
+    for (let i = 0; i < workingTrips.length; i++) {
+        let anchor = workingTrips[i];
+        if (anchor.ringId !== null || anchor.logisticDay > 5) continue;
+
+        const pointA = anchor.getPointName('origin', mode);
+        const pointB = anchor.getPointName('dest', mode);
+        let currentChain = [anchor];
+        anchor.ringId = 'temp'; // Тимчасово блокуємо
+        let currentDest = pointB;
+        let lastTrip = anchor;
+        let searching = true;
+
+        while (searching) {
+            const targetOrigin = currentDest;
+            const targetDest = (currentDest === pointA) ? pointB : pointA;
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+
+            const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+
+            let nextTrip = workingTrips.find(candidate => {
+                const isCandidateEmpty = String(candidate.type || '').trim().toLowerCase() === "порожній";
+                if (isLastEmpty && isCandidateEmpty) return false; // Забороняємо 2 порожніх підряд
+                return candidate.ringId === null && 
+                       candidate.getPointName('origin', mode) === targetOrigin &&
+                       candidate.getPointName('dest', mode) === targetDest &&
+                       candidate.auto === anchor.auto &&
+                       candidate.trueStart > lastTrip.trueStart && 
+                       candidate.trueStart >= (effectiveLastEnd + repark);
+            });
+
+            if (nextTrip) {
+                nextTrip.ringId = 'temp';
+                currentChain.push(nextTrip);
+                currentDest = nextTrip.getPointName('dest', mode);
+                lastTrip = nextTrip;
+            } else {
+                searching = false; 
+            }
+        }
+
+        const draftId = `draft_${Date.now()}_${ringCounter++}`;
+        currentChain.forEach(t => t.ringId = currentChain.length >= minTrips ? draftId : null);
+    }
+}
+
+// --- АЛГОРИТМ 2: FILO (Відкладений човник А-Б-А) ---
+function algoFILO(workingTrips, mode, repark, minTrips) {
+    let ringCounter = 0;
+    for (let i = 0; i < workingTrips.length; i++) {
+        let anchor = workingTrips[i];
+        if (anchor.ringId !== null || anchor.logisticDay > 4) continue;
+
+        const pointA = anchor.getPointName('origin', mode);
+        const pointB = anchor.getPointName('dest', mode);
+        let currentChain = [anchor];
+        anchor.ringId = 'temp';
+        let currentDest = pointB;
+        let lastTrip = anchor;
+        let searching = true;
+
+        while (searching) {
+            const targetOrigin = currentDest;
+            const targetDest = (currentDest === pointA) ? pointB : pointA;
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            const targetLogDay = (lastTrip.logisticDay + 1) % 7;
+            const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+            let nextTrip = workingTrips.findLast(candidate => {
+                const isCandidateEmpty = String(candidate.type || '').trim().toLowerCase() === "порожній";
+                if (isLastEmpty && isCandidateEmpty) return false; // Забороняємо 2 порожніх підряд
+                return candidate.ringId === null && 
+                       candidate.getPointName('origin', mode) === targetOrigin &&
+                       candidate.getPointName('dest', mode) === targetDest &&
+                       candidate.auto === anchor.auto &&
+                       candidate.logisticDay === targetLogDay &&
+                       candidate.trueStart > lastTrip.trueStart && 
+                       candidate.trueStart >= (effectiveLastEnd + repark);
+            });
+
+            if (nextTrip) {
+                nextTrip.ringId = 'temp';
+                currentChain.push(nextTrip);
+                currentDest = nextTrip.getPointName('dest', mode);
+                lastTrip = nextTrip;
+            } else {
+                searching = false; 
+            }
+        }
+
+        const draftId = `draft_${Date.now()}_${ringCounter++}`;
+        currentChain.forEach(t => t.ringId = currentChain.length >= minTrips ? draftId : null);
+    }
+}
+
+// --- АЛГОРИТМ 3: ДЕРЕВО (Транзит, пошук найдовшого ланцюга) ---
+async function algoTree(workingTrips, mode, repark, minTrips) {
+    let ringCounter = 0;
+
+    for (let i = 0; i < workingTrips.length; i++) {
+        // Якщо натиснули "Зупинити" — виходимо з головного циклу
+        if (!isAlgoRunning) break; 
+        if (i % 10 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
+        let anchor = workingTrips[i];
+        if (anchor.ringId !== null || anchor.logisticDay > 5) continue;
+
+        let bestChain = [];
+        let exploreCounter = 0; // Додаємо лічильник ітерацій рекурсії
+
+        // РОБИМО ФУНКЦІЮ explore АСИНХРОННОЮ
+        async function explore(currentTrip, currentChain) {
+            if (!isAlgoRunning) return; 
+
+            // Даємо браузеру час "почути" клік кожні 200 гілок
+            exploreCounter++;
+            if (exploreCounter % 200 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+            
+            if (!isAlgoRunning) return; // Перевіряємо ще раз після мікро-паузи
+
+            if (currentChain.length > bestChain.length) {
+                bestChain = [...currentChain];
+            }
+
+            let effectiveLastEnd = currentTrip.trueEnd + (currentTrip.trueEnd < currentTrip.trueStart ? 10080 : 0);
+
+            const currentDest = currentTrip.getPointName('dest', mode);
+            const isCurrentEmpty = String(currentTrip.type || '').trim().toLowerCase() === "порожній";
+
+            let candidates = workingTrips.filter(candidate => {
+                const isCandidateEmpty = String(candidate.type || '').trim().toLowerCase() === "порожній";
+                if (isCurrentEmpty && isCandidateEmpty) return false; // Забороняємо 2 порожніх підряд
+                return candidate.ringId === null && 
+                       !currentChain.includes(candidate) && 
+                       candidate.getPointName('origin', mode) === currentDest &&
+                       candidate.auto === anchor.auto && 
+                       candidate.trueStart > currentTrip.trueStart && 
+                       candidate.trueStart >= (effectiveLastEnd + repark);
+            });
+
+            for (let candidate of candidates) {
+                if (!isAlgoRunning) break; // Обриваємо перебір сусідів
+                // ОБОВ'ЯЗКОВО додаємо await перед рекурсивним викликом
+                await explore(candidate, [...currentChain, candidate]);
+            }
+        }
+
+        // Запускаємо асинхронну рекурсію (з await)
+        await explore(anchor, [anchor]);
+
+        // Після виходу з рекурсії перевіряємо, чи не зупинили ми алгоритм
+        if (bestChain.length >= minTrips && isAlgoRunning) {
+            const draftId = `draft_${Date.now()}_${ringCounter++}`;
+            bestChain.forEach(t => t.ringId = draftId);
+            
+            renderDraft(); 
+            // Пауза дає браузеру можливість "почути" клік по кнопці "Зупинити"
+            await new Promise(resolve => setTimeout(resolve, 10)); 
+        }
+    }
+}
+
+
+// --- АЛГОРИТМ 4: ОПТИМІЗОВАНЕ ДЕРЕВО (Beam Search + Max Wait) ---
+async function algoTreeOptimized(workingTrips, mode, repark, minTrips) {
+    let ringCounter = 0;
+    
+    // НАЛАШТУВАННЯ АЛГОРИТМУ
+    const BEAM_WIDTH = 3; // Залишаємо тільки 3 найкращі варіанти продовження
+    const MAX_WAIT_MINS = 24 * 60; // Відсікаємо все, де машина чекає більше 48 годин
+
+    for (let i = 0; i < workingTrips.length; i++) {
+        if (!isAlgoRunning) break; 
+        if (i % 10 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
+        let anchor = workingTrips[i];
+        if (anchor.ringId !== null || anchor.logisticDay > 5) continue;
+
+        let bestChain = [];
+        let exploreCounter = 0; 
+
+        async function explore(currentTrip, currentChain) {
+            if (!isAlgoRunning) return; 
+
+            exploreCounter++;
+            if (exploreCounter % 200 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 0));
+            }
+            
+            if (!isAlgoRunning) return; 
+
+            if (currentChain.length > bestChain.length) {
+                bestChain = [...currentChain];
+            }
+
+            let effectiveLastEnd = currentTrip.trueEnd + (currentTrip.trueEnd < currentTrip.trueStart ? 10080 : 0);
+            const currentDest = currentTrip.getPointName('dest', mode);
+            const isCurrentEmpty = String(currentTrip.type || '').trim().toLowerCase() === "порожній";
+            let candidates = workingTrips.filter(candidate => {
+                const isCandidateEmpty = String(candidate.type || '').trim().toLowerCase() === "порожній";
+                if (isCurrentEmpty && isCandidateEmpty) return false; // Забороняємо 2 порожніх підряд
+                if (candidate.ringId !== null) return false;
+                if (currentChain.includes(candidate)) return false;
+                if (candidate.getPointName('origin', mode) !== currentDest) return false;
+                if (candidate.auto !== anchor.auto) return false;
+                
+                let waitTime = candidate.trueStart - effectiveLastEnd;
+                
+                // 1. Time-Window Pruning: Перевіряємо, чи вписується простій у вікно
+                return waitTime >= repark && waitTime <= MAX_WAIT_MINS;
+            });
+
+            // 2. Beam Search: Сортуємо кандидатів за часом простою (від найменшого до найбільшого)
+            candidates.sort((a, b) => {
+                let waitA = a.trueStart - effectiveLastEnd;
+                let waitB = b.trueStart - effectiveLastEnd;
+                return waitA - waitB;
+            });
+
+            // Залишаємо лише ТОП-N кандидатів
+            let topCandidates = candidates.slice(0, BEAM_WIDTH);
+
+            // Рекурсивно запускаємо тільки для найкращих
+            for (let candidate of topCandidates) {
+                if (!isAlgoRunning) break; 
+                await explore(candidate, [...currentChain, candidate]);
+            }
+        }
+
+        await explore(anchor, [anchor]);
+
+        if (bestChain.length >= minTrips && isAlgoRunning) {
+            const draftId = `draft_opt_${Date.now()}_${ringCounter++}`;
+            bestChain.forEach(t => t.ringId = draftId);
+            
+            renderDraft(); 
+            await new Promise(resolve => setTimeout(resolve, 10)); 
+        }
+    }
+}
+
+
+// Функція видалення конкретного кільця (додайте її)
+/*function deleteRingFromDraft(draftId) {
+    window.allTrips.forEach(t => {
+        if (t.ringId === draftId) t.ringId = null;
+    });
+    renderDraft();
+    render(window.allTrips);
+}*/
+
+function deleteRingFromDraft(draftRingId) {
+    window.allTrips.forEach(t => {
+        if (t.ringId === draftRingId) {
+            // Якщо це було розширене кільце з архіву - повертаємо старий ID
+            if (t.originalRingId) {
+                t.ringId = t.originalRingId;
+                t.originalRingId = null;
+            } else {
+                t.ringId = null; // Якщо це звичайний новий графік - викидаємо в реєстр
+            }
+        }
+    });
+    renderDraft();
+    renderArchive(); // Оновлюємо архів, бо туди могли повернутися кільця
+    
+    if (document.getElementById('register-tab').classList.contains('active')) {
+        render(window.allTrips);
+    }
+}
+
+// ФУНКЦІЯ ОЧИЩЕННЯ ЧЕРНЕТКИ
+function clearDraft() {
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('draft_')) {
+            t.ringId = null;
+        }
+    });
+    render(window.allTrips);
+    renderDraft(); // Перемалювати порожню чернетку
+}
+
+// ФУНКЦІЯ ЗАТВЕРДЖЕННЯ КІЛЬЦЯ
+function approveRing(draftRingId) {
+    const approvedId = draftRingId.replace('draft_', 'approved_');
+    window.allTrips.forEach(t => {
+        if (t.ringId === draftRingId) {
+            t.ringId = approvedId;
+            t.originalRingId = null; // Очищаємо пам'ять про відкат, кільце затверджено
+        }
+    });
+    renderDraft();
+    renderArchive();
+}
+
+// --- ЛОГІКА НЕСКІНЧЕННОГО СКРОЛЛУ ---
+
+function setupDraftObserver() {
+    if (draftObserver) draftObserver.disconnect();
+    const sentinel = document.getElementById('draft-sentinel');
+    draftObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) loadMoreDrafts();
+    }, { root: document.getElementById('draft-scroll'), rootMargin: '200px' });
+    draftObserver.observe(sentinel);
+}
+
+function loadMoreDrafts() {
+    if (draftRenderedCount >= draftCardsHTML.length) return;
+    const content = document.getElementById('draft-content');
+    const nextBatch = draftCardsHTML.slice(draftRenderedCount, draftRenderedCount + CARDS_PER_PAGE);
+    
+    if (draftRenderedCount === 0) content.innerHTML = ''; // Очищаємо перед першою партією
+    content.insertAdjacentHTML('beforeend', nextBatch.join(''));
+    draftRenderedCount += CARDS_PER_PAGE;
+}
+
+function setupArchiveObserver() {
+    if (archiveObserver) archiveObserver.disconnect();
+    const sentinel = document.getElementById('archive-sentinel');
+    archiveObserver = new IntersectionObserver((entries) => {
+        if (entries[0].isIntersecting) loadMoreArchives();
+    }, { root: document.getElementById('archive-scroll'), rootMargin: '200px' });
+    archiveObserver.observe(sentinel);
+}
+
+function loadMoreArchives() {
+    if (archiveRenderedCount >= archiveCardsHTML.length) return;
+    const content = document.getElementById('archive-content');
+    const nextBatch = archiveCardsHTML.slice(archiveRenderedCount, archiveRenderedCount + CARDS_PER_PAGE);
+    
+    if (archiveRenderedCount === 0) content.innerHTML = '';
+    content.insertAdjacentHTML('beforeend', nextBatch.join(''));
+    archiveRenderedCount += CARDS_PER_PAGE;
+}
+
+// --- ОНОВЛЕНІ ФУНКЦІЇ РЕНДЕРУ ---
+
+function renderDraft() {
+    const mode = modeSelect.value;
+    const draftRingsMap = {};
+    
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('draft_')) {
+            if (!draftRingsMap[t.ringId]) draftRingsMap[t.ringId] = [];
+            draftRingsMap[t.ringId].push(t);
+        }
+    });
+
+    const rings = Object.values(draftRingsMap);
+
+    // ==========================================
+    // НОВІ РЯДКИ: Оновлюємо цифру на екрані
+    const countBadge = document.getElementById('draft-count-badge');
+    if (countBadge) countBadge.innerText = rings.length;
+    // ==========================================
+
+    if (rings.length === 0) {
+        document.getElementById('draft-content').innerHTML = '<div class="empty-msg" style="width:100%;">Чернетка порожня. Запустіть алгоритм або закольцуйте вручну.</div>';
+        draftCardsHTML = [];
+        return;
+    }
+
+    // Генеруємо масив усіх карток, але поки не вставляємо в DOM
+    draftCardsHTML = rings.map((ring, idx) => {
+        const rId = ring[0].ringId;
+        ring.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+
+        // НОВОЕ: Определяем цвет шапки
+        const autoType = String(ring[0].auto || "").toUpperCase();
+        const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
+
+        const isExtended = rId.includes('_ext_');
+        const titleText = isExtended ? `🔄 Докільцьований наряд #${idx + 1} (${ring[0].auto})` : `Наряд #${idx + 1} (${ring[0].auto})`;
+        const deleteBtnText = isExtended ? `❌ Відмінити докільцювання` : `🗑️ Видалити`;
+
+        return `
+        <div class="ring-card" id="${rId}">
+            <div class="ring-header" style="background: ${headerBg};">
+                <strong>${titleText}</strong>
+                <div style="gap: 10px; display: flex;">
+                    <button class="action-btn" onclick="editRing('${rId}')">✏️ Редагувати</button>
+                    <button class="success-btn" onclick="approveRing('${rId}')">✔ Затвердити</button>
+                    <button class="danger-btn" onclick="deleteRingFromDraft('${rId}')">${deleteBtnText}</button>
+                </div>
+            </div>
+            <div class="table-container mini-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-short">GRF</th>
+                            <th class="col-med">Тип</th>
+                            <th class="col-short">ФЗ</th>
+                            <th class="col-long">Маршрут</th>
+                            <th class="col-med">Відправник</th><th class="col-med">Отримувач</th>
+                            <th class="col-day">Пн</th><th class="col-day">Вт</th><th class="col-day">Ср</th>
+                            <th class="col-day">Чт</th><th class="col-day">Пт</th><th class="col-day">Сб</th><th class="col-day">Нд</th>
+                            <th class="col-short">Подача</th>
+                            <th class="col-short">Виїзд</th>
+                            <th class="col-short">Приїзд</th>
+                            <th class="col-short">Вільний</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${ring.map(t => `
+                            <tr>
+                                <td>${t.grf}</td>
+                                <td>${t.type || ''}</td>
+                                <td>${t.load || ''}</td>
+                                <td title="${t.route}">${t.route}</td>
+                                <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
+                                ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+                                <td class="time-cell">${t.podachaStr}</td>
+                                <td class="time-cell">${t.depStr}</td>
+                                <td class="time-cell">${t.arrStr}</td>
+                                <td class="time-cell">${t.freeStr}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+    });
+
+    // Скидаємо лічильник та ініціюємо перше завантаження
+    draftRenderedCount = 0;
+    document.getElementById('draft-content').innerHTML = ''; 
+    loadMoreDrafts();
+    setupDraftObserver();
+}
+
+function updateArchiveStats() {
+    if (!window.allTrips) return;
+
+    let totalTrips = window.allTrips.length;
+    let ringedTrips = 0;
+    let approvedRingsMap = {};
+
+    // Рахуємо графіки та збираємо унікальні кільця
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            ringedTrips++;
+            if (!approvedRingsMap[t.ringId]) {
+                approvedRingsMap[t.ringId] = { auto: t.auto };
+            }
+        }
+    });
+
+    let totalRings = Object.keys(approvedRingsMap).length;
+    let bdfRings = 0;
+    let otherRings = 0;
+
+    // Рахуємо типи авто в кільцях
+    Object.values(approvedRingsMap).forEach(ring => {
+        if (String(ring.auto || "").toUpperCase().includes("БДФ")) {
+            bdfRings++;
+        } else {
+            otherRings++;
+        }
+    });
+
+    // Рахуємо відсоток кільцювання
+    let percent = totalTrips > 0 ? ((ringedTrips / totalTrips) * 100).toFixed(1) : 0;
+
+    // Оновлюємо DOM
+    document.getElementById('stat-total-rings').innerText = totalRings;
+    document.getElementById('stat-bdf-rings').innerText = bdfRings;
+    document.getElementById('stat-other-rings').innerText = otherRings;
+    document.getElementById('stat-total-trips').innerText = totalTrips;
+    document.getElementById('stat-ringed-trips').innerText = ringedTrips;
+    document.getElementById('stat-percent').innerText = `${percent}%`;
+}
+
+function renderArchive() {
+    const mode = modeSelect.value;
+    const archiveMap = {};
+    
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+            archiveMap[t.ringId].push(t);
+        }
+    });
+
+    const rings = Object.values(archiveMap);
+    const searchTerm = document.getElementById('archive_search')?.value.toLowerCase().trim() || "";
+
+    // Підготовлюємо масив з іменами, щоб не втратити оригінальну нумерацію при фільтрації
+    let processedRings = rings.map((ring, idx) => {
+        const rId = ring[0].ringId;
+        const displayName = window.ringNamesMap[rId] ? window.ringNamesMap[rId] : `Затверджений наряд #${idx + 1}`;
+        return { ring, rId, displayName };
+    });
+
+    // Фільтруємо, якщо щось введено в поле пошуку
+    if (searchTerm) {
+        processedRings = processedRings.filter(item => item.displayName.toLowerCase().includes(searchTerm));
+    }
+
+    if (processedRings.length === 0) {
+        document.getElementById('archive-content').innerHTML = '<div class="empty-msg" style="width:100%;">Поки що немає затверджених кілець або за вашим запитом нічого не знайдено.</div>';
+        archiveCardsHTML = [];
+        return;
+    }
+
+    archiveCardsHTML = processedRings.map((item) => {
+        const { ring, rId, displayName } = item;
+        
+        ring.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+
+        // НОВОЕ: Определяем цвет шапки
+        const autoType = String(ring[0].auto || "").toUpperCase();
+        const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
+
+        return `
+        <div class="ring-card approved" id="${rId}">
+            <div class="ring-header" style="background: ${headerBg};">
+                <strong>Наряд: ${displayName} (${ring[0].auto})</strong>
+                <div style="gap: 10px; display: flex;">
+                    <button class="action-btn" onclick="openStapler('${rId}')">📎 Знайти пару</button>
+                    <button class="action-btn" onclick="editRing('${rId}')">✏️ Редагувати</button>
+                    <button class="danger-btn" onclick="deleteRingFromArchive('${rId}')">🗑️ Видалити</button>
+                </div>
+            </div>
+            <div class="table-container mini-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-short">GRF</th>
+                            <th class="col-med">Тип</th>
+                            <th class="col-short">ФЗ</th>
+                            <th class="col-long">Маршрут</th>
+                            <th class="col-med">Відправник</th><th class="col-med">Отримувач</th>
+                            <th class="col-day">Пн</th><th class="col-day">Вт</th><th class="col-day">Ср</th>
+                            <th class="col-day">Чт</th><th class="col-day">Пт</th><th class="col-day">Сб</th><th class="col-day">Нд</th>
+                            <th class="col-short">Подача</th>
+                            <th class="col-short">Виїзд</th>
+                            <th class="col-short">Приїзд</th>
+                            <th class="col-short">Вільний</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${ring.map(t => `
+                            <tr>
+                                <td>${t.grf}</td>
+                                <td>${t.type || ''}</td>
+                                <td>${t.load || ''}</td>
+                                <td title="${t.route}">${t.route}</td>
+                                <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
+                                ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+                                <td class="time-cell">${t.podachaStr}</td>
+                                <td class="time-cell">${t.depStr}</td>
+                                <td class="time-cell">${t.arrStr}</td>
+                                <td class="time-cell">${t.freeStr}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+    });
+
+    archiveRenderedCount = 0;
+    document.getElementById('archive-content').innerHTML = '';
+    loadMoreArchives();
+    updateArchiveStats();
+    setupArchiveObserver();
+}
+
+function approveAllRings() {
+    let hasDrafts = false;
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('draft_')) {
+            t.ringId = t.ringId.replace('draft_', 'approved_');
+            hasDrafts = true;
+        }
+    });
+    
+    if (hasDrafts) {
+        renderDraft(); // Очистит вкладку черновика
+        renderArchive(); // Добавит все в архив
+    }
+}
+
+function unapproveRing(approvedId) {
+    const draftId = approvedId.replace('approved_', 'draft_');
+    window.allTrips.forEach(t => {
+        if (t.ringId === approvedId) {
+            t.ringId = draftId;
+        }
+    });
+    renderArchive();
+    renderDraft();
+}
+
+// Відкриття спливаючого вікна
+function openFilter(event, column) {
+    event.stopPropagation();
+    currentFilterColumn = column;
+    
+    const popup = document.getElementById('filter-popup');
+    const itemsContainer = document.getElementById('filter-popup-items');
+    const selectAllCb = document.getElementById('filter-select-all');
+    const mode = modeSelect.value;
+    
+    // Збираємо унікальні значення з поточних даних
+    const uniqueValues = new Set();
+    window.allTrips.forEach(t => {
+        let val;
+        // ЗМІНЕНО: Беремо сирі дані складу
+        if (column === 'origin') val = t.origin;
+        else if (column === 'dest') val = t.destination;
+        else if (column === 'auto') val = t.auto;
+        else if (column === 'type') val = t.type;
+        
+        if (val) uniqueValues.add(val);
+    });
+    
+    // Рендеримо чекбокси
+    const sortedVals = Array.from(uniqueValues).sort();
+    itemsContainer.innerHTML = sortedVals.map(val => {
+        const isChecked = activeFilters[column].has(val) ? 'checked' : '';
+        return `
+            <label class="filter-popup-item">
+                <input type="checkbox" value="${val}" class="filter-cb" ${isChecked}>
+                ${val}
+            </label>
+        `;
+    }).join('');
+    
+    // Перевіряємо, чи обрані всі, для галочки "Вибрати всі"
+    const allChecked = Array.from(itemsContainer.querySelectorAll('.filter-cb')).every(cb => cb.checked);
+    selectAllCb.checked = sortedVals.length > 0 && allChecked && activeFilters[column].size > 0;
+    
+    // Позиціонування вікна під колонкою
+    const rect = event.target.getBoundingClientRect();
+    popup.style.display = 'block';
+    popup.style.top = `${rect.bottom + window.scrollY + 5}px`;
+    
+    // Перевіряємо, чи не вилазить за правий край екрану
+    let leftPos = rect.left + window.scrollX;
+    if (leftPos + 200 > window.innerWidth) leftPos = window.innerWidth - 210;
+    popup.style.left = `${leftPos}px`;
+}
+
+// Кнопка "Вибрати всі"
+function toggleAllFilterItems(mainCheckbox) {
+    document.querySelectorAll('.filter-cb').forEach(cb => {
+        cb.checked = mainCheckbox.checked;
+    });
+}
+
+// Застосування фільтра
+function applyPopupFilter() {
+    if (!currentFilterColumn) return;
+    activeFilters[currentFilterColumn].clear();
+    
+    document.querySelectorAll('.filter-cb').forEach(cb => {
+        if (cb.checked) activeFilters[currentFilterColumn].add(cb.value);
+    });
+    
+    closeFilterPopup();
+    updateFilterIcons();
+    render(window.allTrips);
+}
+
+// Скидання поточного фільтра
+function clearPopupFilter() {
+    if (!currentFilterColumn) return;
+    activeFilters[currentFilterColumn].clear();
+    closeFilterPopup();
+    updateFilterIcons();
+    render(window.allTrips);
+}
+
+// Закриття вікна
+function closeFilterPopup() {
+    document.getElementById('filter-popup').style.display = 'none';
+}
+
+// Оновлення кольору іконок у шапці
+function updateFilterIcons() {
+    ['origin', 'dest', 'auto', 'type'].forEach(col => {
+        const icon = document.querySelector(`.filter-icon[data-col="${col}"]`);
+        if (icon) {
+            if (activeFilters[col].size > 0) {
+                icon.classList.add('active');
+            } else {
+                icon.classList.remove('active');
+            }
+        }
+    });
+}
+
+// Закривати попап при кліку поза ним
+document.addEventListener('click', (e) => {
+    const popup = document.getElementById('filter-popup');
+    if (popup.style.display === 'block' && !popup.contains(e.target) && !e.target.classList.contains('filter-icon')) {
+        closeFilterPopup();
+    }
+});
+
+
+// ==========================================
+// ЛОГІКА РУЧНОГО КОНСТРУКТОРА КІЛЕЦЬ
+// ==========================================
+let constructorRing = []; // Масив графіків, які ми зараз збираємо
+let constructorOriginalStatus = 'draft';
+
+let constructorEditingRingId = null; 
+let editingTripsBackup = [];
+
+// 1. Слухач подвійного кліку по головній таблиці
+document.getElementById('table_body').addEventListener('dblclick', function(e) {
+    const tr = e.target.closest('tr');
+    if (!tr || !tr.dataset.id) return;
+    
+    // Знімаємо виділення тексту, якщо браузер встиг його зробити
+    window.getSelection().removeAllRanges();
+    
+    startConstructor(tr.dataset.id);
+});
+
+// 2. Запуск конструктора
+function startConstructor(tripId) {
+    const trip = window.allTrips.find(t => t.id === tripId);
+    if (!trip || trip.ringId !== null) return; // Якщо вже в кільці - ігноруємо
+
+    constructorRing = [trip]; // Починаємо нове кільце
+    
+    // Показуємо вкладку і перемикаємося на неї
+    document.getElementById('constructor-tab-btn').style.display = 'block';
+    switchTab('constructor-tab');
+    
+    renderConstructor();
+}
+
+// 3. Рендер панелей Конструктора
+function renderConstructor() {
+    const mode = modeSelect.value;
+    const repark = parseInt(reparkInput.value) || 0;
+    
+    // Рендер ВЕРХНЬОЇ панелі (поточне кільце)
+    const topBody = document.getElementById('constructor-current-body');
+    topBody.innerHTML = constructorRing.map((t, idx) => {
+        // Дозволяємо видаляти лише останній доданий графік (щоб не розірвати ланцюг)
+        const isLast = idx === constructorRing.length - 1;
+        const actionBtn = isLast ? `<button class="btn-remove" onclick="removeFromConstructor()">X</button>` : '';
+        
+        return `
+        <tr>
+            <td>${actionBtn}</td>
+            <td>${t.grf}</td>
+            <td>${t.type || ''}</td>
+            <td>${t.load || ''}</td>
+            <td title="${t.route}">${t.route}</td>
+            <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
+            ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+            <td class="time-cell">${t.podachaStr}</td>
+            <td class="time-cell">${t.depStr}</td>
+            <td class="time-cell">${t.arrStr}</td>
+            <td class="time-cell">${t.freeStr}</td>
+        </tr>`;
+    }).join('');
+
+    // Знаходимо кандидатів для НИЖНЬОЇ панелі
+    const lastTrip = constructorRing[constructorRing.length - 1];
+    const targetOrigin = lastTrip.getPointName('dest', mode);
+    let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+    const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+    const candidates = window.allTrips.filter(t => {
+        const isCandidateEmpty = String(t.type || '').trim().toLowerCase() === "порожній";
+        if (isLastEmpty && isCandidateEmpty) return false; // Забороняємо пропонувати порожній після порожнього
+        if (t.ringId !== null) return false; // Вже зайнятий
+        if (constructorRing.includes(t)) return false; // Вже в цьому кільці
+        if (t.getPointName('origin', mode) !== targetOrigin) return false; // Не збігається місто
+        if (t.auto !== lastTrip.auto) return false; // Різні авто
+        if (t.trueStart < lastTrip.trueStart) return false; // Захист від подорожі в минуле
+        if (t.trueStart < (effectiveLastEnd + repark)) return false; // Не встигає з перепарковкою
+        return true;
+    });
+
+    // НОВЕ: Сортуємо знайдених кандидатів
+    candidates.sort((a, b) => {
+        if (a.trueStart !== b.trueStart) {
+            return a.trueStart - b.trueStart;
+        }
+        return a.logisticDay - b.logisticDay;
+    });
+
+    // Рендер НИЖНЬОЇ панелі
+    const bottomBody = document.getElementById('constructor-candidates-body');
+    if (candidates.length === 0) {
+        bottomBody.innerHTML = `<tr><td colspan="18" style="text-align:center; padding: 20px; color:#666;">Немає доступних продовжень для цього маршруту 🤷‍♂️</td></tr>`;
+    } else {
+        bottomBody.innerHTML = candidates.map(t => `
+        <tr>
+            <td><button class="btn-add" onclick="addToConstructor('${t.id}')">+</button></td>
+            <td>${t.grf}</td>
+            <td>${t.type || ''}</td>
+            <td>${t.load || ''}</td>
+            <td title="${t.route}">${t.route}</td>
+            <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
+            ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+            <td class="time-cell">${t.podachaStr}</td>
+            <td class="time-cell">${t.depStr}</td>
+            <td class="time-cell">${t.arrStr}</td>
+            <td class="time-cell">${t.freeStr}</td>
+        </tr>`).join('');
+    }
+}
+
+// 4. Додавання до кільця
+function addToConstructor(tripId) {
+    const trip = window.allTrips.find(t => t.id === tripId);
+    if (trip) {
+        constructorRing.push(trip);
+        renderConstructor();
+    }
+}
+
+// 5. Видалення останнього рейсу з кільця
+function removeFromConstructor() {
+    if (constructorRing.length > 1) {
+        constructorRing.pop();
+        renderConstructor();
+    } else {
+        cancelConstructor(); // Якщо видалили останній/єдиний графік - закриваємо конструктор
+    }
+}
+
+// 6. Скасування (вихід)
+function cancelConstructor() {
+    if (constructorEditingRingId) {
+        // Якщо ми редагували існуюче кільце - відновлюємо його з бекапу
+        editingTripsBackup.forEach(t => {
+            t.ringId = constructorEditingRingId;
+        });
+
+        // Повертаємося на ту вкладку, звідки прийшли
+        if (constructorOriginalStatus === 'approved') {
+            renderArchive();
+            switchTab('archive-tab');
+        } else {
+            renderDraft();
+            switchTab('draft-tab');
+        }
+    } else {
+        // Якщо ми збирали кільце з нуля - просто закриваємо і йдемо в Реєстр
+        switchTab('register-tab');
+    }
+
+    // Очищаємо всі змінні
+    constructorRing = [];
+    editingTripsBackup = [];
+    constructorEditingRingId = null;
+    constructorOriginalStatus = 'draft';
+    
+    document.getElementById('constructor-tab-btn').style.display = 'none';
+    render(window.allTrips); // Оновлюємо реєстр
+}
+
+// 7. Збереження кільця (відправляємо в чернетку)
+// 7. Збереження кільця (відправляємо куди треба)
+function saveConstructorRing() {
+    if (constructorRing.length === 0) return;
+    
+    const prefix = constructorOriginalStatus === 'approved' ? 'approved' : 'draft';
+    const newId = `${prefix}_${Date.now()}_manual`;
+    
+    constructorRing.forEach(t => t.ringId = newId);
+    
+    constructorRing = [];
+    document.getElementById('constructor-tab-btn').style.display = 'none';
+    
+    if (constructorOriginalStatus === 'approved') {
+        renderArchive();
+        switchTab('archive-tab');
+    } else {
+        renderDraft();
+        switchTab('draft-tab');
+    }
+
+    // ==========================================
+    // НОВЕ: Скидаємо всі статуси і бекапи
+    constructorOriginalStatus = 'draft'; 
+    constructorEditingRingId = null;
+    editingTripsBackup = [];
+    // ==========================================
+    
+    render(window.allTrips); 
+}
+
+// 8. Редагування існуючого кільця
+function editRing(ringId) {
+    // Знаходимо всі графіки, які належать до цього кільця
+    const ringTrips = window.allTrips.filter(t => t.ringId === ringId);
+    
+    if (ringTrips.length === 0) return;
+
+    // НОВЕ: Запам'ятовуємо, чи це кільце з архіву
+    constructorOriginalStatus = ringId.startsWith('approved_') ? 'approved' : 'draft';
+
+    //==========================================
+    // НОВЕ: Запам'ятовуємо оригінальне кільце для відкату
+    constructorEditingRingId = ringId;
+    editingTripsBackup = [...ringTrips];
+    // ==========================================
+
+    // Обов'язково сортуємо їх у правильному порядку (як вони йшли в кільці)
+    ringTrips.sort((a, b) => {
+        if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+        return a.trueStart - b.trueStart;
+    });
+
+    // Завантажуємо кільце в Конструктор
+    constructorRing = [...ringTrips];
+
+    // "Розбираємо" кільце: знімаємо статус затвердженого/чернетки
+    ringTrips.forEach(t => t.ringId = null);
+
+    // Оновлюємо всі вкладки, щоб кільце зникло з Чернетки/Архіву і з'явилося в Реєстрі
+    renderDraft();
+    renderArchive();
+    render(window.allTrips); 
+
+    // Перемикаємося на вкладку Конструктора
+    document.getElementById('constructor-tab-btn').style.display = 'block';
+    switchTab('constructor-tab');
+    renderConstructor();
+}
+
+// ==========================================
+// ЛОГІКА СТЕПЛЕРА (Об'єднання затверджених кілець)
+// ==========================================
+
+let currentStaplerSourceId = null;
+
+function openStapler(sourceRingId) {
+    const mode = modeSelect.value;
+    const repark = parseInt(reparkInput.value) || 0;
+    currentStaplerSourceId = sourceRingId;
+
+    // Збираємо всі кільця з архіву в об'єкт
+    const archiveMap = {};
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+            archiveMap[t.ringId].push(t);
+        }
+    });
+
+    // Отримуємо вихідне кільце та сортуємо його
+    const sourceRing = archiveMap[sourceRingId];
+    sourceRing.sort((a, b) => {
+        if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+        return a.trueStart - b.trueStart;
+    });
+
+    const lastTrip = sourceRing[sourceRing.length - 1];
+    const targetOrigin = lastTrip.getPointName('dest', mode);
+    let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+    const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+    const candidatesRings = [];
+
+    // Перебираємо інші кільця в архіві
+    for (const [rId, ringTrips] of Object.entries(archiveMap)) {
+        if (rId === sourceRingId) continue; // Самого себе пропускаємо
+
+        ringTrips.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+
+        const firstTrip = ringTrips[0];
+        const isCandidateEmpty = String(firstTrip.type || '').trim().toLowerCase() === "порожній";
+        if (isLastEmpty && isCandidateEmpty) continue; // Не показуємо як варіант для склеювання
+
+        // Перевіряємо умови стиковки
+        if (firstTrip.auto !== lastTrip.auto) continue;
+        if (firstTrip.getPointName('origin', mode) !== targetOrigin) continue;
+        if (firstTrip.trueStart < (effectiveLastEnd + repark)) continue;
+
+        candidatesRings.push(ringTrips);
+    }
+
+    const contentDiv = document.getElementById('stapler-content');
+    
+    if (candidatesRings.length === 0) {
+        contentDiv.innerHTML = `<div class="empty-msg" style="width:100%;">Підходящих кілець для продовження не знайдено 🤷‍♂️</div>`;
+    } else {
+        // Рендеримо картки кандидатів
+        contentDiv.innerHTML = candidatesRings.map((ring, idx) => {
+            const rId = ring[0].ringId;
+            
+            // НОВОЕ: Определяем цвет шапки
+            const autoType = String(ring[0].auto || "").toUpperCase();
+            const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
+
+            return `
+            <div class="ring-card approved" style="margin: 0 auto 15px auto;">
+                <div class="ring-header" style="background: ${headerBg};">
+                    <strong>Можливе продовження (${ring[0].auto})</strong>
+                    <button class="success-btn" onclick="stitchRings('${rId}')">🔗 Причепити сюди</button>
+                </div>
+                <div class="table-container mini-table">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th class="col-short">GRF</th><th class="col-med">Тип</th><th class="col-short">ФЗ</th><th class="col-long">Маршрут</th>
+                                <th class="col-med">Відправник</th><th class="col-med">Отримувач</th>
+                                <th class="col-day">Пн</th><th class="col-day">Вт</th><th class="col-day">Ср</th><th class="col-day">Чт</th><th class="col-day">Пт</th><th class="col-day">Сб</th><th class="col-day">Нд</th>
+                                <th class="col-short">Подача</th><th class="col-short">Виїзд</th><th class="col-short">Приїзд</th><th class="col-short">Вільний</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${ring.map(t => `
+                                <tr>
+                                    <td>${t.grf}</td><td>${t.type || ''}</td><td>${t.load || ''}</td><td title="${t.route}">${t.route}</td>
+                                    <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
+                                    ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+                                    <td class="time-cell">${t.podachaStr}</td><td class="time-cell">${t.depStr}</td><td class="time-cell">${t.arrStr}</td><td class="time-cell">${t.freeStr}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            </div>`;
+        }).join('');
+    }
+
+    document.getElementById('stapler-modal').style.display = 'flex';
+}
+
+function closeStapler() {
+    document.getElementById('stapler-modal').style.display = 'none';
+    currentStaplerSourceId = null;
+}
+
+function stitchRings(targetRingId) {
+    if (!currentStaplerSourceId) return;
+
+    const mergedRingId = currentStaplerSourceId; // Запоминаем ID исходного кольца
+
+    // Всім графікам цільового кільця присвоюємо ID вихідного кільця
+    window.allTrips.forEach(t => {
+        if (t.ringId === targetRingId) {
+            t.ringId = mergedRingId;
+        }
+    });
+
+    closeStapler();
+    renderArchive(); // Перемальовуємо архів (оновлює сторінку та скидає скрол)
+
+    // Ищем индекс нашего обновленного кольца в массиве сгенерированных карточек
+    const ringIndex = archiveCardsHTML.findIndex(html => html.includes(`id="${mergedRingId}"`));
+
+    if (ringIndex !== -1) {
+        // Если кольцо за пределами первых 20 отрендеренных, заставляем программу догрузить карточки
+        while (archiveRenderedCount <= ringIndex) {
+            loadMoreArchives();
+        }
+
+        // Даем браузеру миллисекунду на отрисовку элементов в DOM и делаем скролл
+        setTimeout(() => {
+            const targetElement = document.getElementById(mergedRingId);
+            if (targetElement) {
+                // Плавный скролл так, чтобы карточка оказалась по центру экрана
+                targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                // Делаем красивую зеленую вспышку-подсветку, чтобы сразу найти обновленное кольцо
+                targetElement.style.transition = 'box-shadow 0.4s ease-in-out';
+                targetElement.style.boxShadow = '0 0 20px rgba(40, 167, 69, 0.8)';
+                
+                // Убираем подсветку через 2 секунды
+                setTimeout(() => {
+                    targetElement.style.boxShadow = '';
+                }, 2000);
+            }
+        }, 100);
+    }
+}
+
+// Функція для перетягування вікна
+dragElement(document.getElementById("stapler-modal"));
+
+function dragElement(elmnt) {
+    let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+    const header = document.getElementById("stapler-header");
+    
+    if (header) {
+        header.onmousedown = dragMouseDown;
+    } else {
+        elmnt.onmousedown = dragMouseDown;
+    }
+
+    function dragMouseDown(e) {
+        e.preventDefault();
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        document.onmouseup = closeDragElement;
+        document.onmousemove = elementDrag;
+    }
+
+    function elementDrag(e) {
+        e.preventDefault();
+        pos1 = pos3 - e.clientX;
+        pos2 = pos4 - e.clientY;
+        pos3 = e.clientX;
+        pos4 = e.clientY;
+        elmnt.style.top = (elmnt.offsetTop - pos2) + "px";
+        elmnt.style.left = (elmnt.offsetLeft - pos1) + "px";
+    }
+
+    function closeDragElement() {
+        document.onmouseup = null;
+        document.onmousemove = null;
+    }
+}
+
+// ==========================================
+// ЛОГІКА ПОШУКУ ЗА ШАБЛОНОМ
+// ==========================================
+
+async function runPatternAlgo() {
+    const rawPattern = document.getElementById('pattern_input').value;
+    const requireReturn = document.getElementById('pattern_return').checked;
+    const patternMode = document.getElementById('pattern_mode_select').value; // Отримуємо режим зчіпки
+    
+    // Парсимо рядок (розділяємо по дефісах, прибираємо пробіли)
+    const patternNodes = rawPattern.split('-').map(s => s.trim()).filter(Boolean);
+    
+    if (patternNodes.length < 2) {
+        alert("Введіть хоча б два міста, наприклад: Київ - Полтава");
+        return;
+    }
+
+    const repark = parseInt(reparkInput.value) || 0;
+    const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
+
+    // Очищаємо старі незбережені чернетки
+    window.allTrips.forEach(t => { 
+        if(t.ringId && t.ringId.startsWith('draft_')) t.ringId = null; 
+    });
+
+    // Беремо глобальні фільтри
+    const autoVals = Array.from(activeFilters.auto);
+    const typeVals = Array.from(activeFilters.type);
+
+    const workingTrips = window.allTrips.filter(t => {
+        if (t.ringId !== null) return false;
+        if (autoVals.length > 0 && !autoVals.includes(t.auto)) return false;
+        if (typeVals.length > 0 && !typeVals.includes(t.type)) return false;
+        return true;
+    });
+
+    isAlgoRunning = true;
+    let ringCounter = 0;
+    const patternLength = patternNodes.length;
+
+    for (let i = 0; i < workingTrips.length; i++) {
+        let anchor = workingTrips[i];
+        if (anchor.ringId !== null || anchor.logisticDay > 4) continue;
+
+        // ФІЛЬТР 1: Якір має чітко збігатися з першими двома пунктами шаблону САМЕ ПО МІСТАХ
+        if (anchor.getPointName('origin', 'city').toLowerCase() !== patternNodes[0].toLowerCase() ||
+            anchor.getPointName('dest', 'city').toLowerCase() !== patternNodes[1].toLowerCase()) {
+            continue;
+        }
+
+        let currentChain = [anchor];
+        anchor.ringId = 'temp';
+        let lastTrip = anchor;
+        let searching = true;
+        let step = 1; 
+
+        while (searching) {
+            let nextOriginIdx = step % patternLength;
+            let nextDestIdx = (step + 1) % patternLength;
+            
+            let targetCityOrigin = patternNodes[nextOriginIdx];
+            let targetCityDest = patternNodes[nextDestIdx];
+
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            
+            // НОВЕ: Беремо точку призначення попереднього рейсу у вибраному режимі зчіпки
+            let requiredOriginPoint = lastTrip.getPointName('dest', patternMode);
+            const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+            // Шукаємо наступний рейс
+            let nextTrip = workingTrips.find(c => {
+                const isCandidateEmpty = String(c.type || '').trim().toLowerCase() === "порожній";
+                if (isLastEmpty && isCandidateEmpty) return false; // Відсікаємо порожні підряд
+                return c.ringId === null &&
+                       c.auto === anchor.auto && // Той самий тип авто
+                       
+                       // 1. Відповідність місту з шаблону (перевіряємо глобальний напрямок)
+                       c.getPointName('origin', 'city').toLowerCase() === targetCityOrigin.toLowerCase() &&
+                       c.getPointName('dest', 'city').toLowerCase() === targetCityDest.toLowerCase() &&
+                       
+                       // 2. Жорстка зчіпка за обраним режимом (Вузол/Місто/Локація)
+                       c.getPointName('origin', patternMode) === requiredOriginPoint &&
+                       
+                       // 3. Відповідність часу з урахуванням перепарковки
+                       c.trueStart > lastTrip.trueStart &&
+                       c.trueStart >= (effectiveLastEnd + repark);
+            });
+
+            if (nextTrip) {
+                nextTrip.ringId = 'temp';
+                currentChain.push(nextTrip);
+                lastTrip = nextTrip;
+                step++;
+            } else {
+                searching = false;
+            }
+        }
+
+        // Обрізка "хвоста", якщо увімкнено "З поверненням"
+        if (requireReturn) {
+            while (currentChain.length > 0) {
+                let last = currentChain[currentChain.length - 1];
+                // Перевіряємо за містом, бо шаблон ми пишемо містами
+                if (last.getPointName('dest', 'city').toLowerCase() === patternNodes[0].toLowerCase()) {
+                    break;
+                }
+                let removed = currentChain.pop();
+                removed.ringId = null; // Повертаємо рейс у вільний доступ
+            }
+        }
+
+        // Записуємо кільце, якщо воно відповідає мінімальній довжині
+        if (currentChain.length >= minTrips) {
+            const draftId = `draft_pattern_${Date.now()}_${ringCounter++}`;
+            currentChain.forEach(t => t.ringId = draftId);
+        } else {
+            // Скидаємо temp статуси, якщо ланцюг вийшов занадто коротким
+            currentChain.forEach(t => t.ringId = null);
+        }
+    }
+
+    isAlgoRunning = false;
+    renderDraft();
+    render(window.allTrips);
+}
+
+function runAutoStapler() {
+    const mode = modeSelect.value;
+    const repark = parseInt(reparkInput.value) || 0;
+    const maxWaitMins = (parseInt(document.getElementById('stapler_max_wait').value) || 24) * 60;
+    const maxDays = parseInt(document.getElementById('stapler_max_days').value) || 6;
+    const maxDurationMins = maxDays * 1440;
+
+    // 1. Збираємо всі затверджені кільця
+    const archiveMap = {};
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+            archiveMap[t.ringId].push(t);
+        }
+    });
+
+    const availableRings = Object.values(archiveMap);
+    if (availableRings.length < 2) {
+        alert("Недостатньо кілець в Архіві для склейки. Потрібно хоча б два.");
+        return;
+    }
+
+    // 2. Готуємо зручні обгортки для кілець (щоб не рахувати старт/фініш по сто разів)
+    const ringProps = availableRings.map(ring => {
+        ring.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+        
+        const lastTrip = ring[ring.length - 1];
+        let effectiveEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+        
+        return {
+            id: ring[0].ringId,
+            trips: ring,
+            firstStart: ring[0].trueStart,
+            lastEnd: effectiveEnd,
+            startOrigin: ring[0].getPointName('origin', mode),
+            endDest: lastTrip.getPointName('dest', mode),
+            auto: ring[0].auto,
+            used: false
+        };
+    });
+
+    // Сортуємо кільця хронологічно за першим виїздом
+    ringProps.sort((a, b) => a.firstStart - b.firstStart);
+
+    let draftCounter = 0;
+    let changesMade = false;
+
+    // 3. Жадібний пошук (йдемо по кожному кільцю і ліпимо до нього все, що знайдемо)
+    for (let i = 0; i < ringProps.length; i++) {
+        let currentRing = ringProps[i];
+        if (currentRing.used) continue;
+
+        let chain = [currentRing];
+        currentRing.used = true;
+        let searching = true;
+
+        while (searching) {
+            let lastInChain = chain[chain.length - 1];
+            let currentEndMins = lastInChain.lastEnd;
+            let targetOrigin = lastInChain.endDest;
+            let chainStartTime = chain[0].firstStart;
+
+            let bestCandidate = null;
+            let minWait = Infinity;
+
+            // Шукаємо найближче ідеальне продовження
+            for (let j = 0; j < ringProps.length; j++) {
+                let candidate = ringProps[j];
+                if (candidate.used) continue;
+                if (candidate.auto !== currentRing.auto) continue;
+                if (candidate.startOrigin !== targetOrigin) continue;
+
+                // НОВЕ: Перевірка на стику двох кілець
+                const lastTripOfChain = lastInChain.trips[lastInChain.trips.length - 1];
+                const firstTripOfCandidate = candidate.trips[0];
+                const isLastEmpty = String(lastTripOfChain.type || '').trim().toLowerCase() === "порожній";
+                const isCandidateEmpty = String(firstTripOfCandidate.type || '').trim().toLowerCase() === "порожній";
+                if (isLastEmpty && isCandidateEmpty) continue; // Не зшиваємо 2 порожніх графіки на стику
+
+                let waitTime = candidate.firstStart - currentEndMins;
+                
+                // Перевіряємо, чи вписуємося в перепарковку і ліміт простою
+                if (waitTime >= repark && waitTime <= maxWaitMins) {
+                    // Перевіряємо загальну довжину майбутнього наряду
+                    let totalDuration = candidate.lastEnd - chainStartTime;
+                    if (totalDuration <= maxDurationMins) {
+                        if (waitTime < minWait) {
+                            minWait = waitTime;
+                            bestCandidate = candidate;
+                        }
+                    }
+                }
+            }
+
+            if (bestCandidate) {
+                bestCandidate.used = true;
+                chain.push(bestCandidate);
+            } else {
+                searching = false; // Більше немає що причепити
+            }
+        }
+
+        // Якщо вдалося склеїти хоча б 2 кільця — кидаємо їх в Чернетку Степлера
+        if (chain.length > 1) {
+            changesMade = true;
+            const newDraftId = `stapler_draft_${Date.now()}_${draftCounter++}`;
+            
+            chain.forEach(rObj => {
+                rObj.trips.forEach(t => {
+                    t.originalRingId = t.ringId; // Запам'ятовуємо старе ім'я
+                    t.ringId = newDraftId;       // Даємо нове тимчасове ім'я
+                });
+            });
+        }
+    }
+
+    if (changesMade) {
+        renderArchive();
+        document.getElementById('stapler-tab-btn').style.display = 'block'; // Показываем вкладку!
+        switchTab('stapler-draft-tab');
+    } else {
+        alert("Автостеплер нічого не знайшов");
+    }
+}
+
+// 4. Функція малювання Чернетки Степлера
+function renderStaplerDraft() {
+    const mode = modeSelect.value;
+    const staplerMap = {};
+    
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('stapler_draft_')) {
+            if (!staplerMap[t.ringId]) staplerMap[t.ringId] = [];
+            staplerMap[t.ringId].push(t);
+        }
+    });
+
+    const rings = Object.values(staplerMap);
+    const content = document.getElementById('stapler-draft-content');
+
+    if (rings.length === 0) {
+        document.getElementById('stapler-tab-btn').style.display = 'none'; // Прячем кнопку вкладки
+        content.innerHTML = ''; // Очищаем контент
+        
+        // Если мы находились на этой вкладке в момент очистки - перекидываем в Архив
+        if (document.getElementById('stapler-draft-tab').classList.contains('active')) {
+            switchTab('archive-tab');
+        }
+        return;
+    }
+
+    document.getElementById('stapler-tab-btn').style.display = 'block';
+
+    content.innerHTML = rings.map((ring, idx) => {
+        const rId = ring[0].ringId;
+        ring.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+
+        // НОВОЕ: Определяем цвет шапки
+        const autoType = String(ring[0].auto || "").toUpperCase();
+        const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
+
+        return `
+        <div class="ring-card" id="${rId}" style="border: 2px solid #6f42c1 !important;">
+            <div class="ring-header" style="background: ${headerBg};">
+                <strong>🤖 Мега-збірка #${idx + 1} (${ring[0].auto})</strong>
+                <div style="gap: 10px; display: flex;">
+                    <button class="success-btn" onclick="approveStaplerRing('${rId}')">✔ Затвердити</button>
+                    <button class="danger-btn" onclick="rejectStaplerRing('${rId}')">❌ Розбити назад</button>
+                </div>
+            </div>
+            <div class="table-container mini-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-short">GRF</th><th class="col-med">Тип</th><th class="col-short">ФЗ</th><th class="col-long">Маршрут</th>
+                            <th class="col-med">Відпр</th><th class="col-med">Отр</th>
+                            <th class="col-day">Пн</th><th class="col-day">Вт</th><th class="col-day">Ср</th><th class="col-day">Чт</th><th class="col-day">Пт</th><th class="col-day">Сб</th><th class="col-day">Нд</th>
+                            <th class="col-short">Подача</th><th class="col-short">Виїзд</th><th class="col-short">Приїзд</th><th class="col-short">Вільний</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${ring.map(t => `
+                            <tr>
+                                <td>${t.grf}</td><td>${t.type || ''}</td><td>${t.load || ''}</td><td title="${t.route}">${t.route}</td>
+                                <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
+                                ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
+                                <td class="time-cell">${t.podachaStr}</td><td class="time-cell">${t.depStr}</td><td class="time-cell">${t.arrStr}</td><td class="time-cell">${t.freeStr}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+// 5. Функції кнопок у Чернетці Степлера
+function approveStaplerRing(draftId) {
+    const finalId = draftId.replace('stapler_draft_', 'approved_');
+    window.allTrips.forEach(t => {
+        if (t.ringId === draftId) {
+            t.ringId = finalId;
+            t.originalRingId = null; // Очищаємо пам'ять, кільце злите назавжди
+        }
+    });
+    renderStaplerDraft();
+    renderArchive();
+}
+
+function rejectStaplerRing(draftId) {
+    window.allTrips.forEach(t => {
+        if (t.ringId === draftId) {
+            t.ringId = t.originalRingId; // Відкочуємо до старих ID
+            t.originalRingId = null;
+        }
+    });
+    renderStaplerDraft();
+    renderArchive();
+}
+
+function approveAllStapler() {
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('stapler_draft_')) {
+            t.ringId = t.ringId.replace('stapler_draft_', 'approved_');
+            t.originalRingId = null;
+        }
+    });
+    renderStaplerDraft();
+    renderArchive();
+    switchTab('archive-tab');
+}
+
+function rejectAllStapler() {
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('stapler_draft_')) {
+            t.ringId = t.originalRingId;
+            t.originalRingId = null;
+        }
+    });
+    renderStaplerDraft();
+    renderArchive();
+    switchTab('archive-tab');
+}
+
+function exportToExcel() {
+    if (!window.allTrips || window.allTrips.length === 0) {
+        alert("Немає даних для експорту.");
+        return;
+    }
+
+    const mode = document.getElementById('mode_select').value;
+
+    // 1. Нумерація затверджених кілець
+    const approvedRings = new Set();
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            approvedRings.add(t.ringId);
+        }
+    });
+
+    const ringNumberMap = {};
+    let ringCounter = 1;
+    approvedRings.forEach(id => {
+        ringNumberMap[id] = ringCounter++;
+    });
+
+    // 2. Формуємо шапку (те, що користувач бачить на екрані + 2 нові колонки)
+    const headers = [
+        "GRF", "Цифра", "Код", "Група", "Наряд", "Тип", "Авто", "ФЗ", "Маршрут",
+        "Відпр", "Отр", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд",
+        "Водії", "Дедл", "Подача", "Виїзд", "Приїзд", "Вільний", "Комент",
+        "Номер кільця", "Номер графіка"
+    ];
+
+    const exportData = [headers];
+
+    // Допоміжна функція: перетворює "HH:MM" у дробове число, яке Excel розуміє як час
+    const timeToExcelFraction = (timeStr) => {
+        if (!timeStr) return "";
+        const [h, m] = timeStr.split(':').map(Number);
+        if (isNaN(h) || isNaN(m)) return timeStr; // Якщо раптом там текст
+        return (h * 60 + m) / 1440;
+    };
+
+    // 3. Збираємо дані по кожному графіку
+    window.allTrips.forEach(t => {
+        const row = [
+            t.grf || "", t.digit || "", t.code || "", t.group || "", t.naryad || "",
+            t.type || "", t.auto || "", t.load || "", t.route || "",
+            t.getPointName('origin', mode), t.getPointName('dest', mode),
+            ...t.logDays.map(d => d === '+' ? '+' : ''),
+            t.drivers || "", t.deadline || "",
+            
+            // Перетворюємо час
+            timeToExcelFraction(t.podachaStr),
+            timeToExcelFraction(t.depStr),
+            timeToExcelFraction(t.arrStr),
+            timeToExcelFraction(t.freeStr),
+            
+            t.comment || "",
+            
+            // Номер кільця (якщо затверджено)
+            (t.ringId && t.ringId.startsWith('approved_')) ? (window.ringNamesMap[t.ringId] || ringNumberMap[t.ringId]) : "",
+            
+            // Номер графіка (поки порожньо)
+            ""
+        ];
+        exportData.push(row);
+    });
+
+    // 4. Створюємо аркуш
+    const ws = XLSX.utils.aoa_to_sheet(exportData);
+
+    // 5. Застосовуємо форматування часу до колонок Подача(20), Виїзд(21), Приїзд(22), Вільний(23)
+    const timeColIndices = [20, 21, 22, 23];
+    const range = XLSX.utils.decode_range(ws['!ref']);
+    
+    // Проходимося по всіх рядках, крім шапки (R=0)
+    for (let R = 1; R <= range.e.r; ++R) {
+        timeColIndices.forEach(C => {
+            const cellAddress = XLSX.utils.encode_cell({r: R, c: C});
+            const cell = ws[cellAddress];
+            
+            // Якщо клітинка існує і є числом (долею доби) — вішаємо маску часу
+            if (cell && typeof cell.v === 'number') {
+                cell.z = 'hh:mm';
+            }
+        });
+    }
+
+    // 6. Формуємо та завантажуємо файл
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Експорт");
+    XLSX.writeFile(wb, "Кольцмейстер_Експорт.xlsx");
+}
+
+function deleteRingFromArchive(archiveRingId) {
+    if (confirm("Ви впевнені, що хочете видалити цей затверджений наряд? Графіки повернуться в реєстр.")) {
+        window.allTrips.forEach(t => {
+            if (t.ringId === archiveRingId) t.ringId = null;
+        });
+        renderArchive();
+        
+        // Оновлюємо Реєстр, щоб графіки з'явилися там
+        if (document.getElementById('register-tab').classList.contains('active')) {
+            render(window.allTrips);
+        }
+    }
+}
+
+// ==========================================
+// ЛОГІКА ДОКІЛЬЦЮВАННЯ ЗАТВЕРДЖЕНИХ КІЛЕЦЬ
+// ==========================================
+function extendApprovedRings() {
+    const mode = modeSelect.value;
+    const repark = parseInt(reparkInput.value) || 0;
+    const maxWaitMins = 24 * 60; // Максимум 24 години очікування для нового рейсу
+    let extendedCount = 0;
+
+    // 1. Збираємо всі затверджені кільця
+    const archiveMap = {};
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+            archiveMap[t.ringId].push(t);
+        }
+    });
+
+    // 2. Фільтруємо вільні графіки
+    const availableTrips = window.allTrips.filter(t => t.ringId === null);
+
+    // 3. Проходимося по кожному архівному кільцю і пробуємо причепити хвіст
+    for (const [rId, ringTrips] of Object.entries(archiveMap)) {
+        // Сортуємо кільце, щоб знайти останній рейс
+        ringTrips.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+
+        let currentChain = [...ringTrips];
+        let searching = true;
+        let addedNew = false;
+
+        while (searching) {
+            let lastTrip = currentChain[currentChain.length - 1];
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            let targetOrigin = lastTrip.getPointName('dest', mode);
+            const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+            // Шукаємо всі можливі продовження
+            let candidates = availableTrips.filter(c => {
+                const isCandidateEmpty = String(c.type || '').trim().toLowerCase() === "порожній";
+                if (isLastEmpty && isCandidateEmpty) return false;
+                return c.ringId === null &&
+                       c.auto === lastTrip.auto &&
+                       c.getPointName('origin', mode) === targetOrigin &&
+                       c.trueStart >= (effectiveLastEnd + repark) &&
+                       (c.trueStart - effectiveLastEnd) <= maxWaitMins; 
+            });
+
+            if (candidates.length > 0) {
+                // Беремо найближчий за часом (жадібний пошук)
+                candidates.sort((a, b) => a.trueStart - b.trueStart);
+                let bestNext = candidates[0];
+                
+                bestNext.ringId = 'temp'; // Тимчасово бронюємо
+                currentChain.push(bestNext);
+                addedNew = true;
+            } else {
+                searching = false; // Більше немає продовжень
+            }
+        }
+
+        // Якщо вдалося щось причепити — міняємо ID і відправляємо в Чернетку
+        if (addedNew) {
+            const newDraftId = `draft_ext_${Date.now()}_${extendedCount++}`;
+            currentChain.forEach(t => {
+                // Для старих рейсів запам'ятовуємо їхній архівний ID для можливого відкату
+                if (t.ringId !== 'temp') {
+                    t.originalRingId = t.ringId; 
+                } else {
+                    t.originalRingId = null; // Це нові графіки, вони при відкаті просто стануть null
+                }
+                t.ringId = newDraftId;
+            });
+        }
+    }
+
+    if (extendedCount > 0) {
+        renderArchive();
+        renderDraft();
+        switchTab('draft-tab');
+        render(window.allTrips);
+    } else {
+        alert("Не знайдено жодних підходящих вільних графіків для продовження існуючих кілець.");
+    }
+}
+
+loadDictionary();
