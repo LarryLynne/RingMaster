@@ -2459,15 +2459,18 @@ function updateDraftImbalanceStats() {
 
         const origin = t.getPointName('origin', 'city') || 'Невідомо';
         const dest = t.getPointName('dest', 'city') || 'Невідомо';
+        const autoType = t.auto || 'Невідомо'; // Беремо тип авто
 
         if (origin === dest) return; 
 
         let cityA = origin < dest ? origin : dest;
         let cityB = origin < dest ? dest : origin;
-        let key = `${cityA}_${cityB}`;
+        
+        // ГРУПУЄМО ПО МАРШРУТУ + ТИПУ АВТО
+        let key = `${cityA}_${cityB}_${autoType}`;
 
         if (!imbalanceMap[key]) {
-            imbalanceMap[key] = { cityA, cityB, aToB: 0, bToA: 0 };
+            imbalanceMap[key] = { cityA, cityB, auto: autoType, aToB: 0, bToA: 0 };
         }
 
         if (origin === cityA) {
@@ -2488,12 +2491,16 @@ function updateDraftImbalanceStats() {
         });
     }
 
-    // НОВА ЛОГІКА СОРТУВАННЯ
+    // НОВА ЛОГІКА СОРТУВАННЯ (Додано колонку 'auto')
     imbalances.sort((a, b) => {
         let valA, valB;
         if (imbalanceSort.col === 'route') {
-            valA = a.cityA + a.cityB;
-            valB = b.cityA + b.cityB;
+            valA = a.cityA + a.cityB + a.auto;
+            valB = b.cityA + b.cityB + b.auto;
+            return imbalanceSort.asc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        } else if (imbalanceSort.col === 'auto') {
+            valA = a.auto + a.cityA + a.cityB;
+            valB = b.auto + b.cityA + b.cityB;
             return imbalanceSort.asc ? valA.localeCompare(valB) : valB.localeCompare(valA);
         } else if (imbalanceSort.col === 'tu') {
             valA = a.aToB;
@@ -2501,7 +2508,7 @@ function updateDraftImbalanceStats() {
         } else if (imbalanceSort.col === 'na') {
             valA = a.bToA;
             valB = b.bToA;
-        } else { // 'diff' - сортування за перекосом (як було раніше)
+        } else { // 'diff' - сортування за перекосом
             valA = Math.abs(a.aToB - a.bToA);
             valB = Math.abs(b.aToB - b.bToA);
         }
@@ -2523,6 +2530,9 @@ function updateDraftImbalanceStats() {
                     <th class="sortable-th" style="text-align:left;" onclick="setImbalanceSort('route')" title="Сортувати за маршрутом">
                         Маршрут<span class="sort-icon">${getSortIcon('route')}</span>
                     </th>
+                    <th class="sortable-th" style="text-align:center;" onclick="setImbalanceSort('auto')" title="Сортувати за авто">
+                        Авто<span class="sort-icon">${getSortIcon('auto')}</span>
+                    </th>
                     <th class="sortable-th" onclick="setImbalanceSort('tu')" title="Сортувати за кількістю туди">
                         ➡️<span class="sort-icon">${getSortIcon('tu')}</span>
                     </th>
@@ -2538,10 +2548,16 @@ function updateDraftImbalanceStats() {
         let aToB_html = item.aToB > item.bToA ? `<span class="val-tu">${item.aToB}</span>` : item.aToB;
         let bToA_html = item.bToA > item.aToB ? `<span class="val-na">${item.bToA}</span>` : item.bToA;
         
+        // Форматуємо тип авто (якщо дуже довгий - обріжеться завдяки CSS)
+        let autoDisplay = item.auto.length > 8 ? item.auto.substring(0, 7) + '…' : item.auto;
+
         html += `
             <tr>
                 <td class="city-col" title="${item.cityA} - ${item.cityB}">
                     ${item.cityA} - ${item.cityB}
+                </td>
+                <td style="text-align: center; font-size: 9.5px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${item.auto}">
+                    ${autoDisplay}
                 </td>
                 <td>${aToB_html}</td>
                 <td>${bToA_html}</td>

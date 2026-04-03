@@ -725,11 +725,18 @@ input[type="checkbox"] {
     table-layout: fixed; /* НОВЕ: Жорстко фіксуємо макет таблиці */
 }
 
+/* Ширина для колонки "Авто" (друга) */
 .imbalance-table th:nth-child(2),
-.imbalance-table td:nth-child(2),
+.imbalance-table td:nth-child(2) {
+    width: 55px; 
+}
+
+/* Ширина для колонок "Туди" і "Назад" (третя і четверта) */
 .imbalance-table th:nth-child(3),
-.imbalance-table td:nth-child(3) {
-    width: 40px;
+.imbalance-table td:nth-child(3),
+.imbalance-table th:nth-child(4),
+.imbalance-table td:nth-child(4) {
+    width: 32px;
 }
 
 .imbalance-table th, .imbalance-table td {
