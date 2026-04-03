@@ -320,6 +320,7 @@ function handleFile(file) {
         
         render(window.allTrips);
         checkMissingNodes();
+        updateSidebarAutoButtons();
     };
     reader.readAsArrayBuffer(file);
 }
@@ -2441,13 +2442,20 @@ function updateDraftImbalanceStats() {
     const autoVals = Array.from(activeFilters.auto);
     const typeVals = Array.from(activeFilters.type);
     
+    // Отримуємо текст для пошуку по маршруту
+    const searchTerm = (document.getElementById('sidebar_route_search')?.value || '').toLowerCase().trim();
+    
     const imbalanceMap = {};
     
     window.allTrips.forEach(t => {
         if (t.ringId !== null) return; 
         
+        // Глобальні фільтри
         if (autoVals.length > 0 && !autoVals.includes(t.auto)) return;
         if (typeVals.length > 0 && !typeVals.includes(t.type)) return;
+
+        // Новий локальний фільтр по кнопках сайдбару
+        if (sidebarActiveAutos.size > 0 && !sidebarActiveAutos.has(t.auto)) return;
 
         const origin = t.getPointName('origin', 'city') || 'Невідомо';
         const dest = t.getPointName('dest', 'city') || 'Невідомо';
@@ -2471,6 +2479,15 @@ function updateDraftImbalanceStats() {
 
     let imbalances = Object.values(imbalanceMap).filter(item => item.aToB > 0 || item.bToA > 0);
 
+    // Фільтрація по тексту маршруту
+    if (searchTerm) {
+        imbalances = imbalances.filter(item => {
+            const route1 = `${item.cityA} - ${item.cityB}`.toLowerCase();
+            const route2 = `${item.cityB} - ${item.cityA}`.toLowerCase();
+            return route1.includes(searchTerm) || route2.includes(searchTerm);
+        });
+    }
+
     // НОВА ЛОГІКА СОРТУВАННЯ
     imbalances.sort((a, b) => {
         let valA, valB;
@@ -2489,7 +2506,6 @@ function updateDraftImbalanceStats() {
             valB = Math.abs(b.aToB - b.bToA);
         }
         
-        // Для числових значень
         return imbalanceSort.asc ? (valA - valB) : (valB - valA);
     });
 
@@ -2498,7 +2514,6 @@ function updateDraftImbalanceStats() {
         return;
     }
 
-    // Допоміжна функція для малювання стрілочок
     const getSortIcon = (col) => imbalanceSort.col === col ? (imbalanceSort.asc ? ' ▲' : ' ▼') : '';
 
     let html = `
@@ -2537,7 +2552,6 @@ function updateDraftImbalanceStats() {
     html += `</tbody></table>`;
     content.innerHTML = html;
 }
-
 // ==========================================
 // ЛОГІКА БАЛАНСУВАННЯ ПОРОЖНІМИ ПЕРЕГОНАМИ
 // ==========================================
@@ -2890,6 +2904,40 @@ function renderTransitMatrix() {
     
     html += `</tbody>`;
     document.getElementById('transit-table').innerHTML = html;
+}
+
+// ==========================================
+// ЛОКАЛЬНІ ФІЛЬТРИ ДЛЯ САЙДБАРУ БАЛАНСУ
+// ==========================================
+let sidebarActiveAutos = new Set();
+
+function updateSidebarAutoButtons() {
+    const container = document.getElementById('sidebar_auto_buttons');
+    if (!container || !window.allTrips) return;
+
+    // Збираємо всі унікальні типи авто з бази
+    const uniqueAutos = new Set();
+    window.allTrips.forEach(t => {
+        if (t.auto) uniqueAutos.add(t.auto);
+    });
+
+    const sortedAutos = Array.from(uniqueAutos).sort();
+    
+    // Малюємо кнопки
+    container.innerHTML = sortedAutos.map(auto => {
+        const isActive = sidebarActiveAutos.has(auto) ? 'active' : '';
+        return `<button class="sidebar-auto-btn ${isActive}" onclick="toggleSidebarAuto('${auto}')">${auto}</button>`;
+    }).join('');
+}
+
+function toggleSidebarAuto(auto) {
+    if (sidebarActiveAutos.has(auto)) {
+        sidebarActiveAutos.delete(auto);
+    } else {
+        sidebarActiveAutos.add(auto);
+    }
+    updateSidebarAutoButtons();
+    updateDraftImbalanceStats(); // Одразу перемальовуємо таблицю
 }
 
 loadDictionary();

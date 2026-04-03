@@ -778,3 +778,30 @@ input[type="checkbox"] {
     color: var(--primary-color);
     margin-left: 2px;
 }
+
+/* ========================================== */
+/* СТИЛІ ФІЛЬТРІВ САЙДБАРУ (КНОПКИ АВТО)      */
+/* ========================================== */
+.sidebar-auto-btn {
+    background: #f1f3f4;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 10px;
+    font-family: inherit;
+    cursor: pointer;
+    color: #555;
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.sidebar-auto-btn:hover {
+    background: #e0e0e0;
+}
+
+.sidebar-auto-btn.active {
+    background: #e8f0fe;
+    color: #1a73e8;
+    border-color: #1a73e8;
+    font-weight: bold;
+}
