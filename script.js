@@ -9,7 +9,7 @@ const MATRIX_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtRtzMPV6Oy
 // ==========================================
 // СКРОЛЛ ДЛЯ ЧИСЛОВИХ ПОЛІВ (Зміна значень коліщатком)
 // ==========================================
-['repark_time', 'min_trips', 'stapler_max_wait', 'stapler_max_days'].forEach(id => {
+['repark_time', 'min_trips'].forEach(id => {
     const input = document.getElementById(id);
     if (input) {
         input.addEventListener('wheel', function(e) {
@@ -319,6 +319,7 @@ function handleFile(file) {
         });
         
         render(window.allTrips);
+        checkMissingNodes();
     };
     reader.readAsArrayBuffer(file);
 }
@@ -375,9 +376,10 @@ function render(trips) {
             <td class="highlight-node">${t.destination}</td>
             ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
             <td>${t.drivers || ''}</td><td>${t.deadline || ''}</td>
-            <td class="time-cell">${t.podachaStr}</td>
-            <td class="time-cell" style="color: #1a73e8;">${t.depStr}</td>
-            <td class="time-cell">${t.arrStr}</td><td class="time-cell">${t.freeStr}</td>
+            <td class="time-cell" title="Подача: ${t.podachaInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.podachaStr}</td>
+            <td class="time-cell" style="color: #1a73e8;" title="Виїзд: ${t.depInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.depStr}</td>
+            <td class="time-cell" title="Приїзд: ${t.arrInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.arrStr}</td>
+            <td class="time-cell" title="Вільний: ${t.freeInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.freeStr}</td>
             <td title="${t.comment || ''}">${t.comment || ''}</td>
         </tr>`;
     });
@@ -396,6 +398,7 @@ function render(trips) {
     }
     
     status.innerText = `Доступно графіків: ${filtered.length} (всього завантажено: ${trips.length})`;
+    updateDraftImbalanceStats();
 }
 
 // Инициализация Drag and Drop
@@ -463,6 +466,8 @@ async function runShuttleAlgo() {
     const repark = parseInt(reparkInput.value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
     const strategy = document.getElementById('algo_strategy')?.value || 'fifo';
+
+    const requireReturn = document.getElementById('algo_return')?.checked || false;
     //const fromVal = filterFrom.value;
     //const toVal = filterTo.value;
 
@@ -510,15 +515,15 @@ async function runShuttleAlgo() {
 
     try {
         if (strategy === 'fifo') {
-            algoFIFO(workingTrips, mode, repark, minTrips);
+            algoFIFO(workingTrips, mode, repark, minTrips, requireReturn);
         } else if (strategy === 'filo') {
-            algoFILO(workingTrips, mode, repark, minTrips);
+            algoFILO(workingTrips, mode, repark, minTrips, requireReturn);
         } else if (strategy === 'tree') {
             switchTab('draft-tab'); 
-            await algoTree(workingTrips, mode, repark, minTrips);
-        } else if (strategy === 'tree_opt') { // ДОДАЄМО ЦЮ ГІЛКУ
+            await algoTree(workingTrips, mode, repark, minTrips, requireReturn);
+        } else if (strategy === 'tree_opt') { 
             switchTab('draft-tab'); 
-            await algoTreeOptimized(workingTrips, mode, repark, minTrips);
+            await algoTreeOptimized(workingTrips, mode, repark, minTrips, requireReturn);
         }
     } finally {
         // Гарантовано повертаємо кнопки у початковий стан, навіть якщо була помилка або зупинка
@@ -537,7 +542,7 @@ async function runShuttleAlgo() {
 }
 
 // --- АЛГОРИТМ 1: FIFO (Швидкий човник А-Б-А) ---
-function algoFIFO(workingTrips, mode, repark, minTrips) {
+function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn) {
     let ringCounter = 0;
     for (let i = 0; i < workingTrips.length; i++) {
         let anchor = workingTrips[i];
@@ -579,13 +584,28 @@ function algoFIFO(workingTrips, mode, repark, minTrips) {
             }
         }
 
-        const draftId = `draft_${Date.now()}_${ringCounter++}`;
-        currentChain.forEach(t => t.ringId = currentChain.length >= minTrips ? draftId : null);
+        if (requireReturn) {
+            while (currentChain.length > 0) {
+                let last = currentChain[currentChain.length - 1];
+                if (last.getPointName('dest', mode) === pointA) {
+                    break;
+                }
+                let removed = currentChain.pop();
+                removed.ringId = null; // Повертаємо з 'temp'
+            }
+        }
+
+        if (currentChain.length >= minTrips) {
+            const draftId = `draft_${Date.now()}_${ringCounter++}`;
+            currentChain.forEach(t => t.ringId = draftId);
+        } else {
+            currentChain.forEach(t => t.ringId = null); // Знімаємо 'temp', якщо кільце закоротке
+        }
     }
 }
 
 // --- АЛГОРИТМ 2: FILO (Відкладений човник А-Б-А) ---
-function algoFILO(workingTrips, mode, repark, minTrips) {
+function algoFILO(workingTrips, mode, repark, minTrips, requireReturn) {
     let ringCounter = 0;
     for (let i = 0; i < workingTrips.length; i++) {
         let anchor = workingTrips[i];
@@ -627,13 +647,28 @@ function algoFILO(workingTrips, mode, repark, minTrips) {
             }
         }
 
-        const draftId = `draft_${Date.now()}_${ringCounter++}`;
-        currentChain.forEach(t => t.ringId = currentChain.length >= minTrips ? draftId : null);
+        if (requireReturn) {
+            while (currentChain.length > 0) {
+                let last = currentChain[currentChain.length - 1];
+                if (last.getPointName('dest', mode) === pointA) {
+                    break;
+                }
+                let removed = currentChain.pop();
+                removed.ringId = null; 
+            }
+        }
+
+        if (currentChain.length >= minTrips) {
+            const draftId = `draft_${Date.now()}_${ringCounter++}`;
+            currentChain.forEach(t => t.ringId = draftId);
+        } else {
+            currentChain.forEach(t => t.ringId = null); 
+        }
     }
 }
 
 // --- АЛГОРИТМ 3: ДЕРЕВО (Транзит, пошук найдовшого ланцюга) ---
-async function algoTree(workingTrips, mode, repark, minTrips) {
+async function algoTree(workingTrips, mode, repark, minTrips, requireReturn) {
     let ringCounter = 0;
 
     for (let i = 0; i < workingTrips.length; i++) {
@@ -689,6 +724,16 @@ async function algoTree(workingTrips, mode, repark, minTrips) {
         // Запускаємо асинхронну рекурсію (з await)
         await explore(anchor, [anchor]);
 
+        if (requireReturn) {
+            const startPoint = anchor.getPointName('origin', mode);
+            while (bestChain.length > 0) {
+                let last = bestChain[bestChain.length - 1];
+                if (last.getPointName('dest', mode) === startPoint) {
+                    break;
+                }
+                bestChain.pop();
+            }
+        }
         // Після виходу з рекурсії перевіряємо, чи не зупинили ми алгоритм
         if (bestChain.length >= minTrips && isAlgoRunning) {
             const draftId = `draft_${Date.now()}_${ringCounter++}`;
@@ -703,7 +748,7 @@ async function algoTree(workingTrips, mode, repark, minTrips) {
 
 
 // --- АЛГОРИТМ 4: ОПТИМІЗОВАНЕ ДЕРЕВО (Beam Search + Max Wait) ---
-async function algoTreeOptimized(workingTrips, mode, repark, minTrips) {
+async function algoTreeOptimized(workingTrips, mode, repark, minTrips, requireReturn) {
     let ringCounter = 0;
     
     // НАЛАШТУВАННЯ АЛГОРИТМУ
@@ -770,6 +815,17 @@ async function algoTreeOptimized(workingTrips, mode, repark, minTrips) {
 
         await explore(anchor, [anchor]);
 
+        if (requireReturn) {
+            const startPoint = anchor.getPointName('origin', mode);
+            while (bestChain.length > 0) {
+                let last = bestChain[bestChain.length - 1];
+                if (last.getPointName('dest', mode) === startPoint) {
+                    break;
+                }
+                bestChain.pop();
+            }
+        }
+
         if (bestChain.length >= minTrips && isAlgoRunning) {
             const draftId = `draft_opt_${Date.now()}_${ringCounter++}`;
             bestChain.forEach(t => t.ringId = draftId);
@@ -802,6 +858,7 @@ function deleteRingFromDraft(draftRingId) {
             }
         }
     });
+    cleanOrphanedEmpties(); // ПРИБИРАЄМО СМІТТЯ
     renderDraft();
     renderArchive(); // Оновлюємо архів, бо туди могли повернутися кільця
     
@@ -817,6 +874,7 @@ function clearDraft() {
             t.ringId = null;
         }
     });
+    cleanOrphanedEmpties(); // ПРИБИРАЄМО СМІТТЯ
     render(window.allTrips);
     renderDraft(); // Перемалювати порожню чернетку
 }
@@ -953,10 +1011,10 @@ function renderDraft() {
                                 <td title="${t.route}">${t.route}</td>
                                 <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
                                 ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
-                                <td class="time-cell">${t.podachaStr}</td>
-                                <td class="time-cell">${t.depStr}</td>
-                                <td class="time-cell">${t.arrStr}</td>
-                                <td class="time-cell">${t.freeStr}</td>
+                                <td class="time-cell" title="Подача: ${t.podachaInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.podachaStr}</td>
+                                <td class="time-cell" title="Виїзд: ${t.depInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.depStr}</td>
+                                <td class="time-cell" title="Приїзд: ${t.arrInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.arrStr}</td>
+                                <td class="time-cell" title="Вільний: ${t.freeInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.freeStr}</td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -970,6 +1028,7 @@ function renderDraft() {
     document.getElementById('draft-content').innerHTML = ''; 
     loadMoreDrafts();
     setupDraftObserver();
+    updateDraftImbalanceStats();
 }
 
 function updateArchiveStats() {
@@ -1094,10 +1153,10 @@ function renderArchive() {
                                 <td title="${t.route}">${t.route}</td>
                                 <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
                                 ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
-                                <td class="time-cell">${t.podachaStr}</td>
-                                <td class="time-cell">${t.depStr}</td>
-                                <td class="time-cell">${t.arrStr}</td>
-                                <td class="time-cell">${t.freeStr}</td>
+                                <td class="time-cell" title="Подача: ${t.podachaInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.podachaStr}</td>
+                                <td class="time-cell" title="Виїзд: ${t.depInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.depStr}</td>
+                                <td class="time-cell" title="Приїзд: ${t.arrInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.arrStr}</td>
+                                <td class="time-cell" title="Вільний: ${t.freeInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.freeStr}</td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -1348,10 +1407,10 @@ function renderConstructor() {
             <td title="${t.route}">${t.route}</td>
             <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
             ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
-            <td class="time-cell">${t.podachaStr}</td>
-            <td class="time-cell">${t.depStr}</td>
-            <td class="time-cell">${t.arrStr}</td>
-            <td class="time-cell">${t.freeStr}</td>
+            <td class="time-cell" title="Подача: ${t.podachaInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.podachaStr}</td>
+            <td class="time-cell" title="Виїзд: ${t.depInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.depStr}</td>
+            <td class="time-cell" title="Приїзд: ${t.arrInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.arrStr}</td>
+            <td class="time-cell" title="Вільний: ${t.freeInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.freeStr}</td>
         </tr>`).join('');
     }
 }
@@ -1369,6 +1428,7 @@ function addToConstructor(tripId) {
 function removeFromConstructor() {
     if (constructorRing.length > 1) {
         constructorRing.pop();
+        cleanOrphanedEmpties();
         renderConstructor();
     } else {
         cancelConstructor(); // Якщо видалили останній/єдиний графік - закриваємо конструктор
@@ -1483,7 +1543,7 @@ function editRing(ringId) {
 let currentStaplerSourceId = null;
 
 function openStapler(sourceRingId) {
-    const mode = modeSelect.value;
+    const mode = document.getElementById('stapler_mode_select').value;
     const repark = parseInt(reparkInput.value) || 0;
     currentStaplerSourceId = sourceRingId;
 
@@ -1565,7 +1625,10 @@ function openStapler(sourceRingId) {
                                     <td>${t.grf}</td><td>${t.type || ''}</td><td>${t.load || ''}</td><td title="${t.route}">${t.route}</td>
                                     <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
                                     ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
-                                    <td class="time-cell">${t.podachaStr}</td><td class="time-cell">${t.depStr}</td><td class="time-cell">${t.arrStr}</td><td class="time-cell">${t.freeStr}</td>
+                                    <td class="time-cell" title="Подача: ${t.podachaInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.podachaStr}</td>
+                                    <td class="time-cell" title="Виїзд: ${t.depInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.depStr}</td>
+                                    <td class="time-cell" title="Приїзд: ${t.arrInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.arrStr}</td>
+                                    <td class="time-cell" title="Вільний: ${t.freeInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.freeStr}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1792,10 +1855,8 @@ async function runPatternAlgo() {
 function runAutoStapler() {
     const mode = modeSelect.value;
     const repark = parseInt(reparkInput.value) || 0;
-    const maxWaitMins = (parseInt(document.getElementById('stapler_max_wait').value) || 24) * 60;
-    const maxDays = parseInt(document.getElementById('stapler_max_days').value) || 6;
-    const maxDurationMins = maxDays * 1440;
-
+    const maxWaitMins = 100 * 60; // Максимум 24 години між кільцями
+    const maxDurationMins = 10 * 1440; // Максимум 6 днів на весь новий наряд
     // 1. Збираємо всі затверджені кільця
     const archiveMap = {};
     window.allTrips.forEach(t => {
@@ -1981,7 +2042,10 @@ function renderStaplerDraft() {
                                 <td>${t.grf}</td><td>${t.type || ''}</td><td>${t.load || ''}</td><td title="${t.route}">${t.route}</td>
                                 <td>${t.getPointName('origin', mode)}</td><td>${t.getPointName('dest', mode)}</td>
                                 ${t.logDays.map(d => `<td class="col-day">${d === '+' ? '+' : ''}</td>`).join('')}
-                                <td class="time-cell">${t.podachaStr}</td><td class="time-cell">${t.depStr}</td><td class="time-cell">${t.arrStr}</td><td class="time-cell">${t.freeStr}</td>
+                                <td class="time-cell" title="Подача: ${t.podachaInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.podachaStr}</td>
+                                <td class="time-cell" title="Виїзд: ${t.depInt} хв.&#10;TrueStart: ${t.trueStart} хв.">${t.depStr}</td>
+                                <td class="time-cell" title="Приїзд: ${t.arrInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.arrStr}</td>
+                                <td class="time-cell" title="Вільний: ${t.freeInt} хв.&#10;TrueEnd: ${t.trueEnd} хв.">${t.freeStr}</td>
                             </tr>
                         `).join('')}
                     </tbody>
@@ -2136,6 +2200,7 @@ function deleteRingFromArchive(archiveRingId) {
         window.allTrips.forEach(t => {
             if (t.ringId === archiveRingId) t.ringId = null;
         });
+        cleanOrphanedEmpties(); // ПРИБИРАЄМО СМІТТЯ
         renderArchive();
         
         // Оновлюємо Реєстр, щоб графіки з'явилися там
@@ -2232,4 +2297,600 @@ function extendApprovedRings() {
     }
 }
 
+// ==========================================
+// ФУНКЦІЯ ЗСУВУ ШАБЛОНУ ПО КОЛУ
+// ==========================================
+function shiftPattern() {
+    const inputField = document.getElementById('pattern_input');
+    const rawValue = inputField.value;
+
+    // Якщо поле порожнє, нічого не робимо
+    if (!rawValue) return;
+
+    // Розбиваємо рядок по дефісу, прибираємо зайві пробіли і відкидаємо порожні елементи
+    let nodes = rawValue.split('-').map(s => s.trim()).filter(Boolean);
+
+    // Зсуваємо, тільки якщо є хоча б 2 міста
+    if (nodes.length > 1) {
+        // Беремо перше місто і видаляємо його з початку масиву
+        let firstNode = nodes.shift();
+        // Додаємо це місто в кінець масиву
+        nodes.push(firstNode);
+        
+        // Збираємо масив назад у рядок і записуємо в поле
+        inputField.value = nodes.join(' - ');
+    }
+}
+
+// ==========================================
+// ФУНКЦІЯ МАСОВОГО ВИДАЛЕННЯ ЗАТВЕРДЖЕНИХ КІЛЕЦЬ
+// ==========================================
+function deleteAllArchiveRings() {
+    // 1. Отримуємо поточний пошуковий запит
+    const searchTerm = document.getElementById('archive_search')?.value.toLowerCase().trim() || "";
+    
+    // 2. Формуємо текст попередження залежно від того, чи є фільтр
+    const confirmMsg = searchTerm 
+        ? `Ви впевнені, що хочете видалити всі ЗНАЙДЕНІ за запитом "${searchTerm}" наряди? Вони повернуться в реєстр.`
+        : "УВАГА! Ви впевнені, що хочете видалити ВСІ затверджені наряди? Вони повернуться в реєстр.";
+        
+    if (!confirm(confirmMsg)) return;
+
+    // 3. Збираємо всі затверджені кільця
+    const archiveMap = {};
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+            archiveMap[t.ringId].push(t);
+        }
+    });
+
+    const rings = Object.values(archiveMap);
+    let ringsToDelete = [];
+    
+    // 4. Визначаємо, які саме ID треба видалити (з урахуванням пошуку)
+    if (searchTerm) {
+        rings.forEach((ring, idx) => {
+            const rId = ring[0].ringId;
+            const displayName = window.ringNamesMap[rId] ? window.ringNamesMap[rId] : `Затверджений наряд #${idx + 1}`;
+            
+            // Якщо ім'я кільця містить текст з пошуку — додаємо в список на видалення
+            if (displayName.toLowerCase().includes(searchTerm)) {
+                ringsToDelete.push(rId);
+            }
+        });
+    } else {
+        // Якщо пошуку немає, видаляємо всі
+        ringsToDelete = Object.keys(archiveMap);
+    }
+
+    // 5. Очищаємо ringId для знайдених графіків
+    window.allTrips.forEach(t => {
+        if (ringsToDelete.includes(t.ringId)) {
+            t.ringId = null;
+        }
+    });
+    cleanOrphanedEmpties();
+    // 6. Перемальовуємо інтерфейс
+    renderArchive();
+    
+    // Якщо користувач раптом перемикається на реєстр, він теж має бути оновленим
+    if (document.getElementById('register-tab').classList.contains('active')) {
+        render(window.allTrips);
+    }
+}
+
+// ==========================================
+// ПЕРЕВІРКА ВІДСУТНІХ ВУЗЛІВ ПІСЛЯ ЗАВАНТАЖЕННЯ ФАЙЛУ
+// ==========================================
+function checkMissingNodes() {
+    // Якщо довідник ще не завантажився або порожній — немає сенсу перевіряти
+    if (!nodeDictionary || nodeDictionary.size === 0) return;
+
+    const missingNodes = new Set();
+
+    // Проходимо по всіх графіках і перевіряємо Відправника та Отримувача
+    window.allTrips.forEach(t => {
+        // Якщо поле не порожнє і його немає в довіднику — додаємо в Set
+        if (t.origin && !nodeDictionary.has(t.origin)) {
+            missingNodes.add(t.origin);
+        }
+        if (t.destination && !nodeDictionary.has(t.destination)) {
+            missingNodes.add(t.destination);
+        }
+    });
+
+    // Якщо знайшли хоча б один невідомий вузол — показуємо модалку
+    if (missingNodes.size > 0) {
+        const list = document.getElementById('missing-nodes-list');
+        const modal = document.getElementById('missing-nodes-modal');
+        
+        // Сортуємо за алфавітом для краси і перетворюємо в HTML
+        const sortedNodes = Array.from(missingNodes).sort();
+        list.innerHTML = sortedNodes.map(node => `<li>${node}</li>`).join('');
+        
+        modal.style.display = 'flex';
+    }
+}
+
+function closeMissingNodesModal() {
+    document.getElementById('missing-nodes-modal').style.display = 'none';
+}
+
+// ==========================================
+// ЛОГІКА ПІДРАХУНКУ БАЛАНСУ МАРШРУТІВ (САЙДБАР)
+// ==========================================
+let imbalanceSort = { col: 'diff', asc: false };
+
+// Функція, яка спрацьовує при кліку на заголовок таблиці
+function setImbalanceSort(col) {
+    if (imbalanceSort.col === col) {
+        imbalanceSort.asc = !imbalanceSort.asc; // Змінюємо напрямок, якщо клікнули на ту ж колонку
+    } else {
+        imbalanceSort.col = col;
+        // За замовчуванням текст сортуємо від А до Я, а цифри - від більшого до меншого
+        imbalanceSort.asc = (col === 'route'); 
+    }
+    updateDraftImbalanceStats();
+}
+
+function updateDraftImbalanceStats() {
+    const content = document.getElementById('imbalance-content');
+    if (!content || !window.allTrips) return;
+
+    const autoVals = Array.from(activeFilters.auto);
+    const typeVals = Array.from(activeFilters.type);
+    
+    const imbalanceMap = {};
+    
+    window.allTrips.forEach(t => {
+        if (t.ringId !== null) return; 
+        
+        if (autoVals.length > 0 && !autoVals.includes(t.auto)) return;
+        if (typeVals.length > 0 && !typeVals.includes(t.type)) return;
+
+        const origin = t.getPointName('origin', 'city') || 'Невідомо';
+        const dest = t.getPointName('dest', 'city') || 'Невідомо';
+
+        if (origin === dest) return; 
+
+        let cityA = origin < dest ? origin : dest;
+        let cityB = origin < dest ? dest : origin;
+        let key = `${cityA}_${cityB}`;
+
+        if (!imbalanceMap[key]) {
+            imbalanceMap[key] = { cityA, cityB, aToB: 0, bToA: 0 };
+        }
+
+        if (origin === cityA) {
+            imbalanceMap[key].aToB++;
+        } else {
+            imbalanceMap[key].bToA++;
+        }
+    });
+
+    let imbalances = Object.values(imbalanceMap).filter(item => item.aToB > 0 || item.bToA > 0);
+
+    // НОВА ЛОГІКА СОРТУВАННЯ
+    imbalances.sort((a, b) => {
+        let valA, valB;
+        if (imbalanceSort.col === 'route') {
+            valA = a.cityA + a.cityB;
+            valB = b.cityA + b.cityB;
+            return imbalanceSort.asc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        } else if (imbalanceSort.col === 'tu') {
+            valA = a.aToB;
+            valB = b.aToB;
+        } else if (imbalanceSort.col === 'na') {
+            valA = a.bToA;
+            valB = b.bToA;
+        } else { // 'diff' - сортування за перекосом (як було раніше)
+            valA = Math.abs(a.aToB - a.bToA);
+            valB = Math.abs(b.aToB - b.bToA);
+        }
+        
+        // Для числових значень
+        return imbalanceSort.asc ? (valA - valB) : (valB - valA);
+    });
+
+    if (imbalances.length === 0) {
+        content.innerHTML = '<div class="empty-msg" style="font-size: 11px;">Вільних міжміських графіків не знайдено</div>';
+        return;
+    }
+
+    // Допоміжна функція для малювання стрілочок
+    const getSortIcon = (col) => imbalanceSort.col === col ? (imbalanceSort.asc ? ' ▲' : ' ▼') : '';
+
+    let html = `
+        <table class="imbalance-table">
+            <thead>
+                <tr>
+                    <th class="sortable-th" style="text-align:left;" onclick="setImbalanceSort('route')" title="Сортувати за маршрутом">
+                        Маршрут<span class="sort-icon">${getSortIcon('route')}</span>
+                    </th>
+                    <th class="sortable-th" onclick="setImbalanceSort('tu')" title="Сортувати за кількістю туди">
+                        ➡️<span class="sort-icon">${getSortIcon('tu')}</span>
+                    </th>
+                    <th class="sortable-th" onclick="setImbalanceSort('na')" title="Сортувати за кількістю назад">
+                        ⬅️<span class="sort-icon">${getSortIcon('na')}</span>
+                    </th>
+                </tr>
+            </thead>
+            <tbody>
+    `;
+
+    imbalances.forEach(item => {
+        let aToB_html = item.aToB > item.bToA ? `<span class="val-tu">${item.aToB}</span>` : item.aToB;
+        let bToA_html = item.bToA > item.aToB ? `<span class="val-na">${item.bToA}</span>` : item.bToA;
+        
+        html += `
+            <tr>
+                <td class="city-col" title="${item.cityA} - ${item.cityB}">
+                    ${item.cityA} - ${item.cityB}
+                </td>
+                <td>${aToB_html}</td>
+                <td>${bToA_html}</td>
+            </tr>
+        `;
+    });
+
+    html += `</tbody></table>`;
+    content.innerHTML = html;
+}
+
+// ==========================================
+// ЛОГІКА БАЛАНСУВАННЯ ПОРОЖНІМИ ПЕРЕГОНАМИ
+// ==========================================
+
+window.transitMatrix = {}; // Ключ: "ВузолА_ВузолБ", Значення: хвилини
+window.emptiesPriorities = {}; // Ключ: "Місто", Значення: ["Мамка1", "Мамка2"...]
+
+// 1. Завантаження довідників (Виклич цю функцію поруч із loadDictionary() в кінці файлу)
+async function loadBalancingData() {
+    try {
+        const [transitRes, emptiesRes] = await Promise.all([
+            fetch(WEB_APP_URL + '?action=transit'),
+            fetch(WEB_APP_URL + '?action=empties')
+        ]);
+        
+        const transitData = await transitRes.json();
+        transitData.forEach(item => {
+            window.transitMatrix[`${item.originNode}_${item.destNode}`] = item.durationMins;
+        });
+
+        window.emptiesPriorities = await emptiesRes.json();
+        console.log("Довідники балансування завантажено успішно.");
+    } catch (e) {
+        console.error("Помилка завантаження матриць балансування:", e);
+    }
+}
+// ДОДАЙ ВИКЛИК: loadBalancingData(); в самий низ файлу поруч із loadDictionary();
+
+// 2. Фабрика віртуальних перегонів
+function createVirtualEmptyTrip(originNode, destNode, startMins, durationMins, autoType) {
+    let dummyRow = new Array(55).fill("");
+    dummyRow[2] = "EMPTY_" + Math.floor(Math.random() * 1000000); // GRF
+    dummyRow[7] = "Порожній"; // Тип
+    dummyRow[8] = autoType;   // Авто
+    dummyRow[10] = `${originNode} - ${destNode}`; // Маршрут
+    dummyRow[11] = originNode; // Відправник
+    dummyRow[15] = destNode;   // Отримувач
+    
+    let shiftedMins = startMins - 720;
+    
+    // Захист: якщо час падає на понеділок до 12:00 (shiftedMins < 0), 
+    // він належить до логістичної неділі попереднього тижня
+    if (shiftedMins < 0) {
+        shiftedMins += 10080; 
+    }
+    
+    let dayIdx = Math.floor(shiftedMins / 1440) % 7;
+
+    // Ставимо "+" у відповідні колонки сирого масиву (Астрономічні 16-22, Логістичні 23-29)
+    dummyRow[16 + dayIdx] = "+"; 
+    dummyRow[23 + dayIdx] = "+"; 
+
+    let vTrip = new Trip(dummyRow);
+    
+    // Жорстко перезаписуємо час
+    vTrip.trueStart = startMins;
+    vTrip.trueEnd = startMins + durationMins;
+    
+    // Оновлюємо внутрішні хвилини, щоб спливаючі підказки при наведенні працювали коректно
+    vTrip.podachaInt = startMins;
+    vTrip.depInt = startMins;
+    vTrip.arrInt = startMins + durationMins;
+    vTrip.freeInt = startMins + durationMins;
+    
+    // Форматуємо час суворо як "ГГ:ХВ" (без днів тижня)
+    const formatVirtualTime = (totalMins) => {
+        let h = Math.floor((totalMins % 1440) / 60).toString().padStart(2, '0');
+        let m = (Math.round(totalMins) % 60).toString().padStart(2, '0');
+        return `${h}:${m}`;
+    };
+
+    vTrip.podachaStr = formatVirtualTime(vTrip.trueStart);
+    vTrip.depStr = formatVirtualTime(vTrip.trueStart);
+    vTrip.arrStr = formatVirtualTime(vTrip.trueEnd);
+    vTrip.freeStr = formatVirtualTime(vTrip.trueEnd);
+    
+    vTrip.comment = "🤖 Авто-перегон";
+    return vTrip;
+}
+
+// 3. Основне ядро балансування (повертає знайдений перегон + наступний графік або null)
+function findEmptyConnection(lastTrip, availableTrips, reparkMins) {
+    // Захист від двох порожніх підряд
+    if (String(lastTrip.type || '').trim().toLowerCase() === "порожній") return null;
+
+    let originCity = lastTrip.getPointName('dest', 'city');
+    let originNode = lastTrip.destination; // Сирий вузол з довідника
+    let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+
+    let priorities = window.emptiesPriorities[originCity];
+    if (!priorities || priorities.length === 0) return null;
+
+    // Перебираємо міста в порядку пріоритету
+    for (let targetCity of priorities) {
+        // Шукаємо потенційні наступні графіки
+        let candidates = availableTrips.filter(c => {
+            const isCandidateEmpty = String(c.type || '').trim().toLowerCase() === "порожній";
+            return c.ringId === null && 
+                   !isCandidateEmpty && 
+                   c.auto === lastTrip.auto &&
+                   c.getPointName('origin', 'city') === targetCity &&
+                   c.trueStart > effectiveLastEnd; // Хоча б пізніше, ніж ми звільнились
+        });
+
+        // Сортуємо кандидатів хронологічно, щоб брати найближчі
+        candidates.sort((a, b) => a.trueStart - b.trueStart);
+
+        for (let candidate of candidates) {
+            let destNode = candidate.origin;
+            let transitKey = `${originNode}_${destNode}`;
+            
+            // Примусово робимо числом і ставимо 180 хвилин (3 год), якщо скрипт не зміг прочитати таблицю
+            let transitTime = Number(window.transitMatrix[transitKey]);
+            if (isNaN(transitTime) || transitTime <= 0) {
+                transitTime = 180; 
+            }
+
+            if (transitTime > 0) {
+                // Перевіряємо, чи встигаємо: Кінець попереднього + перепарковка + дорога + перепарковка <= Старт наступного
+                let arrivalTime = effectiveLastEnd + reparkMins + transitTime;
+                
+                // Дозволяємо чекати наступного графіка не більше 24 годин (можеш змінити)
+                let waitTime = candidate.trueStart - arrivalTime;
+                
+                if (arrivalTime + reparkMins <= candidate.trueStart && waitTime <= (24 * 60)) {
+                    // БІНГО! Знайшли маршрут. Створюємо віртуальний перегон.
+                    let virtualTrip = createVirtualEmptyTrip(originNode, destNode, effectiveLastEnd + reparkMins, transitTime, lastTrip.auto);
+                    return { virtualTrip, nextTrip: candidate };
+                }
+            }
+        }
+    }
+    return null;
+}
+
+// 4. ІНСТРУМЕНТ 1: Докільцювати затверджені кільця
+function balanceApprovedRings() {
+    const repark = parseInt(reparkInput.value) || 0;
+    let extendedCount = 0;
+
+    const archiveMap = {};
+    window.allTrips.forEach(t => {
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            if (!archiveMap[t.ringId]) archiveMap[t.ringId] = [];
+            archiveMap[t.ringId].push(t);
+        }
+    });
+
+    let availableTrips = window.allTrips.filter(t => t.ringId === null);
+
+    for (const [rId, ringTrips] of Object.entries(archiveMap)) {
+        ringTrips.sort((a, b) => {
+            if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
+            return a.trueStart - b.trueStart;
+        });
+
+        let currentChain = [...ringTrips];
+        let searching = true;
+        let addedNew = false;
+
+        while (searching) {
+            let lastTrip = currentChain[currentChain.length - 1];
+            let connection = findEmptyConnection(lastTrip, availableTrips, repark);
+
+            if (connection) {
+                connection.virtualTrip.ringId = 'temp';
+                connection.nextTrip.ringId = 'temp';
+                currentChain.push(connection.virtualTrip, connection.nextTrip);
+                
+                // Оновлюємо список доступних (видаляємо той, що щойно забрали)
+                availableTrips = availableTrips.filter(t => t.id !== connection.nextTrip.id);
+                addedNew = true;
+            } else {
+                searching = false;
+            }
+        }
+
+        if (addedNew) {
+            const newDraftId = `draft_bal_${Date.now()}_${extendedCount++}`;
+            currentChain.forEach(t => {
+                if (t.ringId !== 'temp') t.originalRingId = t.ringId; 
+                t.ringId = newDraftId;
+                // Якщо це віртуальний рейс, додаємо його в глобальний масив
+                if (t.grf.startsWith('EMPTY_') && !window.allTrips.includes(t)) {
+                    window.allTrips.push(t);
+                }
+            });
+        }
+    }
+
+    if (extendedCount > 0) {
+        renderArchive();
+        renderDraft();
+        switchTab('draft-tab');
+        render(window.allTrips);
+    } else {
+        alert("Не вдалося знайти балансувальних перегонів для існуючих кілець.");
+    }
+}
+
+// 5. ІНСТРУМЕНТ 2: Склеїти залишки в нові кільця
+function balanceDraftTrips() {
+    const repark = parseInt(reparkInput.value) || 0;
+    const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
+    let ringCounter = 0;
+
+    let workingTrips = window.allTrips.filter(t => t.ringId === null);
+
+    for (let i = 0; i < workingTrips.length; i++) {
+        let anchor = workingTrips[i];
+        if (anchor.ringId !== null) continue;
+
+        let currentChain = [anchor];
+        anchor.ringId = 'temp';
+        let searching = true;
+
+        while (searching) {
+            let lastTrip = currentChain[currentChain.length - 1];
+            // Шукаємо серед ТИХ, ЩО ЗАЛИШИЛИСЬ
+            let connection = findEmptyConnection(lastTrip, workingTrips.filter(t => t.ringId === null), repark);
+
+            if (connection) {
+                connection.virtualTrip.ringId = 'temp';
+                connection.nextTrip.ringId = 'temp';
+                currentChain.push(connection.virtualTrip, connection.nextTrip);
+            } else {
+                searching = false;
+            }
+        }
+
+        // Мінімальна кількість графіків (реальні + перегони)
+        if (currentChain.length >= minTrips) {
+            const draftId = `draft_bal_new_${Date.now()}_${ringCounter++}`;
+            currentChain.forEach(t => {
+                t.ringId = draftId;
+                if (t.grf.startsWith('EMPTY_') && !window.allTrips.includes(t)) {
+                    window.allTrips.push(t);
+                }
+            });
+        } else {
+            // Розбираємо ланцюг, якщо не вистачило довжини (віртуальні зникнуть самі)
+            currentChain.forEach(t => t.ringId = null);
+        }
+    }
+
+    renderDraft();
+    render(window.allTrips);
+}
+
+function cleanOrphanedEmpties() {
+    window.allTrips = window.allTrips.filter(t => {
+        // Перевіряємо чи це наша пустишка і чи стала вона "вільною"
+        if (t.grf && t.grf.startsWith('EMPTY_') && t.ringId === null) {
+            // Захист: якщо ми прямо зараз редагуємо кільце в Конструкторі і пустишка лежить там - не чіпаємо!
+            if (typeof constructorRing !== 'undefined' && constructorRing.includes(t)) {
+                return true; 
+            }
+            // В усіх інших випадках - повністю видаляємо з пам'яті системи
+            return false; 
+        }
+        return true;
+    });
+}
+
+// ==========================================
+// ПЕРЕГЛЯД ТА ОНОВЛЕННЯ МАТРИЦІ ТРАНЗИТІВ
+// ==========================================
+
+// 1. Примусове оновлення
+async function forceUpdateBalancingData() {
+    const btn = document.getElementById('btn_update_matrix');
+    if (btn) btn.innerText = "⏳ Оновлення...";
+    
+    await loadBalancingData(); // Викликаємо нашу існуючу функцію
+    
+    if (btn) btn.innerText = "🔄 Оновити довідники";
+    alert(`Довідники оновлено!\nТранзитних маршрутів: ${Object.keys(window.transitMatrix).length}\nМіст з пріоритетами: ${Object.keys(window.emptiesPriorities).length}`);
+}
+
+// 2. Логіка модального вікна та сортування
+let matrixSort = { col: 'origin', asc: true };
+
+function showTransitMatrix() {
+    document.getElementById('matrix-modal').style.display = 'flex';
+    renderTransitMatrix();
+}
+
+function closeMatrixModal() {
+    document.getElementById('matrix-modal').style.display = 'none';
+}
+
+function setMatrixSort(col) {
+    if (matrixSort.col === col) {
+        matrixSort.asc = !matrixSort.asc;
+    } else {
+        matrixSort.col = col;
+        matrixSort.asc = true;
+    }
+    renderTransitMatrix();
+}
+
+function renderTransitMatrix() {
+    let data = [];
+    // Перетворюємо об'єкт window.transitMatrix назад у масив для таблиці
+    for (let key in window.transitMatrix) {
+        let [origin, dest] = key.split('_');
+        data.push({ origin, dest, time: window.transitMatrix[key] });
+    }
+
+    // Сортуємо
+    data.sort((a, b) => {
+        let valA = a[matrixSort.col];
+        let valB = b[matrixSort.col];
+        if (matrixSort.col === 'time') {
+            return matrixSort.asc ? valA - valB : valB - valA;
+        } else {
+            return matrixSort.asc ? valA.localeCompare(valB) : valB.localeCompare(valA);
+        }
+    });
+
+    const getIcon = (col) => matrixSort.col === col ? (matrixSort.asc ? ' ▲' : ' ▼') : '';
+
+    let html = `
+        <thead>
+            <tr>
+                <th class="sortable-th" style="text-align: left;" onclick="setMatrixSort('origin')">Відправник (Вузол)<span class="sort-icon">${getIcon('origin')}</span></th>
+                <th class="sortable-th" style="text-align: left;" onclick="setMatrixSort('dest')">Отримувач (Вузол)<span class="sort-icon">${getIcon('dest')}</span></th>
+                <th class="sortable-th" onclick="setMatrixSort('time')">Хвилини<span class="sort-icon">${getIcon('time')}</span></th>
+                <th>ГГ:ХВ</th>
+            </tr>
+        </thead>
+        <tbody>
+    `;
+
+    if (data.length === 0) {
+        html += `<tr><td colspan="4" style="text-align:center; padding:20px;">Матриця порожня. Натисніть "Оновити довідники".</td></tr>`;
+    } else {
+        data.forEach(item => {
+            let h = Math.floor(item.time / 60).toString().padStart(2, '0');
+            let m = (item.time % 60).toString().padStart(2, '0');
+            
+            html += `<tr>
+                <td style="text-align: left;">${item.origin}</td>
+                <td style="text-align: left;">${item.dest}</td>
+                <td>${item.time}</td>
+                <td style="font-family: monospace; font-weight: bold; color: #1a73e8;">${h}:${m}</td>
+            </tr>`;
+        });
+    }
+    
+    html += `</tbody>`;
+    document.getElementById('transit-table').innerHTML = html;
+}
+
 loadDictionary();
+loadBalancingData();

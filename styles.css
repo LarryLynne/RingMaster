@@ -453,6 +453,7 @@ input[type="checkbox"] {
 /* ========================================== */
 .action-btn, .danger-btn, .success-btn {
     height: 30px;
+    
     padding: 0 15px;
     font-size: 11px;
     font-family: inherit;
@@ -598,13 +599,182 @@ input[type="checkbox"] {
 }
 
 /* Перевизначаємо ширину сітки кілець, щоб вона займала решту місця біля сайдбару */
-#archive-tab .rings-grid {
+#archive-tab .rings-grid,
+#draft-tab .rings-grid {
     flex: 1;
     width: 100%;
 }
 
 
+/* ========================================== */
+/* СТИЛІ ДЛЯ МОДАЛКИ ВІДСУТНІХ ВУЗЛІВ         */
+/* ========================================== */
+.missing-modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.6); /* Темний напівпрозорий фон */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000; /* Має бути поверх усього */
+}
+
+.missing-modal-content {
+    background: #fff;
+    border-radius: 8px;
+    width: 450px;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.3);
+    overflow: hidden;
+}
+
+.missing-modal-header {
+    background: #fce8e6;
+    color: #d93025;
+    padding: 12px 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #fad2cf;
+}
+
+.missing-modal-body {
+    padding: 15px;
+    overflow-y: auto;
+    flex: 1;
+    font-size: 13px;
+    color: #333;
+}
+
+.missing-modal-body p {
+    margin-top: 0;
+    margin-bottom: 15px;
+}
+
+.missing-nodes-list {
+    margin: 0;
+    padding-left: 20px;
+    color: #d93025;
+    font-weight: 600;
+}
+
+.missing-nodes-list li {
+    margin-bottom: 6px;
+}
+
+.missing-modal-footer {
+    padding: 10px 15px;
+    background: #f8f9fa;
+    border-top: 1px solid #eee;
+    display: flex;
+    justify-content: flex-end;
+}
 
 
+/* ========================================== */
+/* СТИЛІ САЙДБАРУ ДЛЯ ПОШУКУ КІЛЕЦЬ (БАЛАНС)  */
+/* ========================================== */
+.draft-layout {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    overflow: hidden;
+    width: 100%;
+}
 
+.draft-sidebar {
+    width: 320px;
+    background: #fff;
+    border-left: 1px solid var(--border-color);
+    padding: 15px;
+    padding-bottom: 0; /* Убираем отступ снизу, чтобы таблица упиралась в край */
+    height: 100%;
+    display: flex;              /* НОВОЕ: Включаем Flexbox */
+    flex-direction: column;     /* НОВОЕ: Располагаем элементы сверху вниз */
+    overflow: hidden;           /* НОВОЕ: Запрещаем скроллиться всей панели */
+    flex-shrink: 0;
+    box-sizing: border-box;
+    box-shadow: -2px 0 5px rgba(0,0,0,0.02);
+}
 
+.draft-sidebar h3 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: var(--primary-color);
+    font-size: 13px;
+    text-transform: uppercase;
+    border-bottom: 2px solid #e8f0fe;
+    padding-bottom: 8px;
+    flex-shrink: 0; /* Запрещаем сжиматься шапке */
+}
+
+/* НОВОЕ: Контейнер для таблицы, который будет скроллиться */
+#imbalance-content {
+    flex: 1;              /* Занимает все оставшееся место */
+    overflow-y: auto;     /* Скролл только здесь! */
+    padding-bottom: 15px;
+}
+
+.imbalance-table {
+    width: 100%;
+    border-collapse: separate; /* ФИКС БАГА: меняем collapse на separate */
+    border-spacing: 0;         /* ФИКС БАГА: убираем зазоры между ячейками */
+    font-size: 11px;
+    table-layout: fixed; /* НОВЕ: Жорстко фіксуємо макет таблиці */
+}
+
+.imbalance-table th:nth-child(2),
+.imbalance-table td:nth-child(2),
+.imbalance-table th:nth-child(3),
+.imbalance-table td:nth-child(3) {
+    width: 40px;
+}
+
+.imbalance-table th, .imbalance-table td {
+    border-bottom: 1px solid #eee;
+    padding: 4px;
+    text-align: center;
+    height: 20px;
+    font-size: 10.5px;
+}
+
+.imbalance-table th {
+    font-weight: 600;
+    color: #555;
+    background: #f8f9fa;
+    position: sticky;
+    top: 0; 
+    z-index: 10;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06); 
+}
+
+.imbalance-table td.city-col {
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #444;
+    /* max-width прибрали, тепер браузер сам ідеально її розтягне */
+}
+
+.val-tu { color: #1e8e3e; font-weight: bold; font-size: 11px; } 
+.val-na { color: #d93025; font-weight: bold; font-size: 11px; }
+
+/* Індикатори сортування в сайдбарі */
+.imbalance-table th.sortable-th {
+    cursor: pointer;
+    user-select: none; /* Щоб текст не виділявся при швидкому кліку */
+    transition: background-color 0.2s ease;
+}
+
+.imbalance-table th.sortable-th:hover {
+    background-color: #e8eaed; /* Легке затемнення при наведенні */
+}
+
+.sort-icon {
+    font-size: 9px;
+    color: var(--primary-color);
+    margin-left: 2px;
+}
