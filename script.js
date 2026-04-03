@@ -1350,8 +1350,14 @@ function renderConstructor() {
     const topBody = document.getElementById('constructor-current-body');
     topBody.innerHTML = constructorRing.map((t, idx) => {
         // Дозволяємо видаляти лише останній доданий графік (щоб не розірвати ланцюг)
-        const isLast = idx === constructorRing.length - 1;
-        const actionBtn = isLast ? `<button class="btn-remove" onclick="removeFromConstructor()">X</button>` : '';
+        let actionBtn = '';
+        if (idx === 0) {
+            // Кнопка для першого (індекс 0)
+            actionBtn = `<button class="btn-remove" onclick="removeFromConstructor(0)" title="Відсікти початок">X</button>`;
+        } else if (idx === constructorRing.length - 1) {
+            // Кнопка для останнього
+            actionBtn = `<button class="btn-remove" onclick="removeFromConstructor(${idx})" title="Відсікти кінець">X</button>`;
+        }
         
         return `
         <tr>
@@ -1426,9 +1432,18 @@ function addToConstructor(tripId) {
 }
 
 // 5. Видалення останнього рейсу з кільця
-function removeFromConstructor() {
+function removeFromConstructor(index) {
+    // Якщо індекс не передано, за замовчуванням видаляємо останній
+    if (index === undefined) index = constructorRing.length - 1;
+
     if (constructorRing.length > 1) {
-        constructorRing.pop();
+        if (index === 0) {
+            // Видаляємо перший елемент масиву
+            constructorRing.shift(); 
+        } else {
+            // Видаляємо останній елемент масиву
+            constructorRing.pop(); 
+        }
         cleanOrphanedEmpties();
         renderConstructor();
     } else {
