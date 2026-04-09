@@ -19,7 +19,7 @@
         <div id="drop_zone" class="drop-zone">📂 Тягни файл сюди</div>
         <input type="file" id="file_input" style="display:none" accept=".xlsx">
         <a href="https://docs.google.com/spreadsheets/d/1l9xS6gP40uBfc8LYdA0rhZmyW749w3ICFRdR9W77ZvY/edit?usp=sharing" target="_blank" class="action-btn" style="text-decoration: none;">⚙️ Налаштування</a>
-        <button onclick="showTransitMatrix()" class="action-btn" style="background-color: #fff3e0; color: #e65100; border-color: #ff9800;">⏱ Матриця часу</button>
+        <button onclick="showTransitMatrix()" class="warning-btn">⏱ Матриця часу</button>
         <button onclick="forceUpdateBalancingData()" id="btn_update_matrix" class="action-btn">🔄 Оновити довідники</button>
         <div id="status" class="status-msg">Очікування довідника...</div>
     </div>
@@ -30,6 +30,7 @@
         <button class="tab-btn" id="constructor-tab-btn" onclick="switchTab('constructor-tab')" style="display:none;">🛠 Конструктор</button>
         <button class="tab-btn" id="stapler-tab-btn" onclick="switchTab('stapler-draft-tab')" style="display: none; color: #6f42c1;">🧷 Автостеплер</button>
         <button class="tab-btn" onclick="switchTab('archive-tab')">📦 Затверджені кільця</button>
+        <button class="tab-btn" onclick="switchTab('audit-tab')">🏥 Аудит кілець</button>
     </div>
 
     <div id="register-tab" class="tab-content active">
@@ -74,86 +75,77 @@
     </div>
 
     <div id="draft-tab" class="tab-content">
-        <div class="control-bar" style="background: #fff; padding: 8px 15px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: flex-start; gap: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+        <div class="control-bar" style="background: #fff; padding: 12px 15px; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
 
-            <div style="display: flex; flex-direction: column; gap: 6px; flex: 0 1 auto;">
-
-                <div style="display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 6px 12px; border-radius: 6px; border: 1px solid #e0e0e0;">
-                    <div style="display: flex; gap: 15px; align-items: center; flex-wrap: wrap;">
-                        <div class="control-group">
-                            <label>Режим кільцювання:</label>
-                            <select id="mode_select">
-                                <option value="node">Вузлом</option>
-                                <option value="city">Містом</option>
-                                <option value="city2">Локацією</option>
-                            </select>
-                        </div>
-                        <div class="control-group">
-                            <label>Алгоритм:</label>
-                            <select id="algo_strategy">
-                                <option value="fifo">FIFO</option>
-                                <option value="filo">FILO</option>
-                                <option value="tree_opt">Швидке дерево (Оптимізоване)</option>
-                                <option value="tree">Глобальне дерево</option>
-                            </select>
-                        </div>
-                        <div class="control-group" style="flex-direction: row; align-items: center; gap: 5px;">
-                            <input type="checkbox" id="algo_return" checked>
-                            <label for="algo_return" style="margin: 0; cursor: pointer;" title="Замкнути кільце у місті старту">З поверненням</label>
-                        </div>
-                        <div class="control-group">
-                            <label>Перепарковка (хв):</label>
-                            <input type="number" id="repark_time" value="30" style="width: 50px;">
-                        </div>
-                        <div class="control-group">
-                            <label>Мін. графіків:</label>
-                            <input type="number" id="min_trips" value="4" style="width: 50px;">
-                        </div>
+            <div style="display: flex; gap: 15px; align-items: flex-start; flex-wrap: wrap;">
+                
+                <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border: 1px solid #e0e0e0; display: flex; gap: 15px; align-items: center;">
+                    <div class="control-group">
+                        <label>Режим:</label>
+                        <select id="mode_select"> <option value="node">Вузлом</option>
+                            <option value="city">Містом</option>
+                            <option value="city2">Локацією</option>
+                        </select>
                     </div>
-                    <div style="display: flex; gap: 10px; flex-shrink: 0; margin-left: 15px;">
-                        <button onclick="runShuttleAlgo()" id="btn_run_algo" class="action-btn">🔍 Шукати кільця</button>
-                        <button onclick="stopAlgo()" id="btn_stop_algo" class="danger-btn" style="display:none;">🛑 Зупинити пошук</button>
+                    <div class="control-group">
+                        <label>Перепарковка (хв):</label>
+                        <input type="number" id="repark_time" value="30" style="width: 50px;">
+                    </div>
+                    <div class="control-group">
+                        <label>Мін. графіків:</label>
+                        <input type="number" id="min_trips" value="4" style="width: 50px;">
+                    </div>
+                    <div class="control-group" style="flex-direction: row; align-items: center; gap: 5px; border-left: 1px solid #ccc; padding-left: 15px;">
+                        <input type="checkbox" id="global_return" checked>
+                        <label for="global_return" style="margin: 0; cursor: pointer; color: #1a73e8; font-weight: bold;" title="Замкнути кільце у місті старту">З поверненням</label>
                     </div>
                 </div>
 
-                <div style="display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 6px 12px; border-radius: 6px; border: 1px solid #e0e0e0;">
-                    <div style="display: flex; gap: 15px; align-items: center;">
+                <div style="background: #f8f9fa; padding: 8px 12px; border-radius: 6px; border: 1px solid #e0e0e0; display: flex; gap: 15px; align-items: center; flex: 1;">
+                    <div class="control-group">
+                        <label>Алгоритм:</label>
+                        <select id="master_algo_select" onchange="toggleAlgoSettings()">
+                            <option value="fifo">FIFO</option>
+                            <option value="filo">FILO</option>
+                            <option value="tree_opt">Швидке дерево</option>
+                            <option value="tree">Глобальне дерево</option>
+                            <option value="pattern">За шаблоном</option>
+                            <option value="pp">З порожніми</option>
+                        </select>
+                    </div>
 
-                        <div class="control-group">
-                            <label>Режим кільцювання:</label>
-                            <select id="pattern_mode_select">
-                                <option value="node">Вузлом</option>
-                                <option value="city">Містом</option>
-                                <option value="city2">Локацією</option>
-                            </select>
-                        </div>
-
+                    <div id="dynamic_pattern_settings" style="display: none; align-items: center; gap: 10px; border-left: 1px solid #ccc; padding-left: 15px;">
                         <div class="control-group">
                             <label><strong>Шаблон:</strong></label>
-                            <input type="text" id="pattern_input" placeholder="Київ - Полтава - Дніпро" style="width: 280px;">
+                            <input type="text" id="pattern_input" placeholder="Київ - Полтава - Дніпро" style="width: 250px;">
                             <button onclick="shiftPattern()" class="action-btn" style="padding: 0 8px; font-size: 14px;" title="Крутнути ланцюг">🔄</button>
                         </div>
-                        <div class="control-group" style="flex-direction: row; align-items: center; gap: 5px;">
-                            <input type="checkbox" id="pattern_return" checked>
-                            <label for="pattern_return" style="margin: 0; cursor: pointer;" title="Замкнути кільце у місті старту">З поверненням</label>
-                        </div>
                     </div>
-                    <div style="display: flex; flex-shrink: 0; margin-left: 15px;">
-                        <button onclick="runPatternAlgo()" class="action-btn">🔍 Шукати за шаблоном</button>
+
+                    <div id="dynamic_pp_settings" style="display: none; align-items: center; gap: 10px; border-left: 1px solid #ccc; padding-left: 15px;">
+                        <div style="display: flex; align-items: center; gap: 5px; background: #fce8e6; border: 1px solid #fad2cf; padding: 2px 6px; border-radius: 4px;">
+                            <input type="checkbox" id="empty_return_mode" title="Шукати порожній перегон у місто, звідки виїхав попередній рейс">
+                            <label for="empty_return_mode" style="cursor: pointer; font-size: 11px; color: #d93025; margin: 0;" title="Шукати порожній перегон у місто, звідки виїхав попередній рейс">ПП додому</label>
+                        </div>
+                        <span style="font-size: 10px; color: #666; font-style: italic;">* ігнорує фільтри реєстру</span>
                     </div>
                 </div>
-
             </div>
 
-            <div id="draft-actions" style="display: flex; flex-direction: row; gap: 10px; flex-shrink: 0; align-items: center;">
-                
-                <button onclick="balanceDraftTrips()" class="action-btn" style="background-color: #fce8e6; color: #d93025; border-color: #d93025;">🚚 Кільцювати з ПП</button>
-                <div style="font-size: 12px; font-weight: 600; color: #5f6368; background: #e8f0fe; padding: 5px 10px; border-radius: 4px; border: 1px solid #d2e3fc;">
-                    Знайдено: <strong id="draft-count-badge" style="color: #1a73e8; font-size: 14px;">0</strong>
+            <div id="draft-actions" style="display: flex; justify-content: space-between; align-items: center;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <button onclick="runMasterAlgorithm()" id="btn_run_algo" class="action-btn" style="font-size: 12px; padding: 0 20px;">🔍 Запустити пошук</button>
+                    <button onclick="stopAlgo()" id="btn_stop_algo" class="danger-btn" style="display:none; font-size: 12px; padding: 0 20px;">🛑 Зупинити пошук</button>
+                    
+                    <div style="font-size: 12px; font-weight: 600; color: #5f6368; background: #e8f0fe; padding: 5px 10px; border-radius: 4px; border: 1px solid #d2e3fc; margin-left: 10px;">
+                        Знайдено: <strong id="draft-count-badge" style="color: #1a73e8; font-size: 14px;">0</strong>
+                    </div>
                 </div>
-
-                <button onclick="approveAllRings()" class="success-btn">✔ Затвердити всі</button>
-                <button onclick="clearDraft()" class="danger-btn">🗑️ Очистити</button>
+                
+                <div style="display: flex; gap: 10px;">
+                    <button onclick="approveAllRings()" class="success-btn">✔ Затвердити всі</button>
+                    <button onclick="clearDraft()" class="danger-btn">🗑️ Очистити</button>
+                </div>
             </div>
 
         </div>
@@ -194,11 +186,11 @@
 
             <button onclick="runAutoStapler()" class="action-btn">🧷 Запустити Автостеплер</button>
             <button onclick="assignRingNames()" class="action-btn" id="btn_name_rings">🏷️ Дати імена кільцям</button>
-            <button onclick="extendApprovedRings()" class="action-btn" style="background-color: #e8f0fe; color: #1a73e8;">🔄 Докільцювати</button>
-            <button onclick="balanceApprovedRings()" class="action-btn" style="background-color: #fce8e6; color: #d93025; border-color: #d93025;">🚚 Балансувати порожніми</button>
+            <button onclick="extendApprovedRings()" class="action-btn">🔄 Докільцювати</button>
+            <button onclick="balanceApprovedRings()" class="danger-btn">🚚 Балансувати порожніми</button>
             <div class="control-group" style="margin-left: 15px; border-left: 1px solid #ccc; padding-left: 15px;">
                 <label>🔍 Пошук:</label>
-                <input type="text" id="archive_search" placeholder="Номер кільця..." style="width: 140px;" oninput="renderArchive()">
+                <input type="text" id="archive_search" placeholder="Номер кільця..." style="width: 120px;" oninput="renderArchive()">
             </div>
             <button onclick="deleteAllArchiveRings()" class="danger-btn" style="margin-left: auto;">🗑️ Видалити видимі</button>
             <button onclick="exportToExcel()" class="success-btn" style="margin-left: auto;">💾 Експорт в Excel</button>
@@ -224,6 +216,34 @@
             </div>
         </div>
     </div>
+
+    <div id="audit-tab" class="tab-content">
+        <div class="control-bar" style="background: #fff; padding: 12px 15px; border-bottom: 1px solid var(--border-color); display: flex; gap: 15px; align-items: center; box-shadow: 0 1px 3px rgba(0,0,0,0.05); z-index: 10;">
+            <div id="audit_drop_zone" class="drop-zone" style="border-color: #e65100; color: #e65100; background: #fff3e0;">
+                📂 Завантажити старі кільця
+            </div>
+            <input type="file" id="audit_file_input" style="display:none" accept=".xlsx">
+            
+            <div class="control-group" style="border-left: 1px solid #ccc; padding-left: 15px;">
+                <label title="Допуск в хвилинах для пошуку альтернативного графіка при автозціленні">Пошук заміни (± хв):</label>
+                <input type="number" id="audit_tolerance" value="120" style="width: 60px;">
+            </div>
+
+            <button onclick="runAudit()" class="action-btn" id="btn_run_audit" style="display:none; margin-left: auto;">
+                🔍 Запустити перевірку
+            </button>
+        </div>
+        
+        <div id="audit-header-panel" style="padding: 15px 15px 0 15px; background: #f8f9fa; z-index: 5; border-bottom: 1px solid #ddd; flex-shrink: 0;"></div>
+        
+        <div id="audit-scroll" class="rings-grid" style="flex: 1; overflow-y: auto;">
+            <div id="audit-content">
+                <div class="empty-msg">Завантажте Excel-файл з раніше затвердженими кільцями (файл експорту).</div>
+            </div>
+            <div id="audit-sentinel" style="height: 10px;"></div>
+        </div>
+    </div>
+
 
     <div id="constructor-tab" class="tab-content">
         <div class="constructor-top">
@@ -319,6 +339,27 @@
         <div id="stapler-content" class="floating-modal-content rings-grid">
         </div>
     </div>
+    <div id="heal-modal" class="floating-modal" style="display:none; width: 1000px; z-index: 1001;">
+        <div id="heal-header" class="floating-modal-header">
+            <strong>💊 Лікування кільця: <span id="heal-ring-name" style="color: #1a73e8;"></span></strong>
+            <button class="danger-btn" onclick="closeHealModal()" style="padding: 2px 6px;">❌</button>
+        </div>
+        <div class="floating-modal-content" style="display: flex; flex-direction: column; gap: 15px;">
+            <div>
+                <strong>Поточний стан (натисніть 🔍 для заміни зламаного)</strong>
+                <div id="heal-top-panel" class="table-container mini-table" style="max-height: 250px; margin-top: 5px;"></div>
+            </div>
+            
+            <div id="heal-bottom-container" style="display: none;">
+                <strong style="color: #1e8e3e;">Доступні кандидати (вписуються в час та маршрут):</strong>
+                <div id="heal-bottom-panel" class="table-container mini-table" style="max-height: 250px; margin-top: 5px;"></div>
+            </div>
+            
+            <div style="text-align: right; padding-top: 10px; border-top: 1px solid #ccc;">
+                <button id="btn-save-heal" class="success-btn" style="display: none;" onclick="saveHealedRing()">💾 Зберегти вилікуване кільце</button>
+            </div>
+        </div>
+    </div>
     <div id="missing-nodes-modal" class="missing-modal-overlay" style="display:none;">
         <div class="missing-modal-content">
             <div class="missing-modal-header">
@@ -347,5 +388,6 @@
         </div>
     </div>
     <script src="script.js?v=3"></script>
+    <script src="audit.js?v=1"></script>
 </body>
 </html>

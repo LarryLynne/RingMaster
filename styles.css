@@ -451,7 +451,7 @@ input[type="checkbox"] {
 /* ========================================== */
 /* ЕДИНЫЙ СТИЛЬ КНОПОК */
 /* ========================================== */
-.action-btn, .danger-btn, .success-btn {
+.action-btn, .danger-btn, .success-btn, .warning-btn {
     height: 30px;
     
     padding: 0 15px;
@@ -495,48 +495,33 @@ input[type="checkbox"] {
 .danger-btn:hover { background-color: #fad2cf; }
 .danger-btn:active { background-color: #f8b4a8; border-color: #c22b22; }
 
-
-
-
-/* ========================================== */
-/* ВОГНЯНИЙ ЕФЕКТ ДЛЯ КНОПКИ ЗУПИНКИ          */
-/* ========================================== */
-
-@keyframes fire-pulse {
-    0% {
-        box-shadow: 0 0 5px #ff5722, 0 0 15px #ff5722, inset 0 0 5px #ff5722;
-        background-color: #d93025;
-        color: white;
-        border-color: #ff5722;
-        transform: scale(1);
-    }
-    50% {
-        box-shadow: 0 0 15px #ff9800, 0 0 30px #ff5722, inset 0 0 10px #ff9800;
-        background-color: #ff3d00;
-        color: white;
-        border-color: #ff9800;
-        transform: scale(1.03); /* Ледь помітне збільшення (дихання) */
-    }
-    100% {
-        box-shadow: 0 0 5px #ff5722, 0 0 15px #ff5722, inset 0 0 5px #ff5722;
-        background-color: #d93025;
-        color: white;
-        border-color: #ff5722;
-        transform: scale(1);
-    }
+/* Помаранчевий (Матриця / Увага) */
+.warning-btn {
+    background-color: #fff3e0;
+    color: #e65100;
+    border: 1px solid #ff9800;
 }
+.warning-btn:hover { background-color: #ffe0b2; }
+.warning-btn:active { background-color: #ffcc80; border-color: #f57c00; }
 
+
+/* ========================================== */
+/* СТАТИЧНА КНОПКА ЗУПИНКИ ПОШУКУ             */
+/* ========================================== */
 #btn_stop_algo {
-    animation: fire-pulse 2s infinite; /* Нескінченна анімація, поки кнопка видима */
-    /*font-weight: bold;*/
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5); /* Щоб текст краще читався на яскравому фоні */
-    transition: none; /* Відключаємо стандартні переходи, бо ними керує keyframes */
+    background-color: #ff5722; /* Яскравий помаранчевий колір */
+    color: white !important;
+    border: 1px solid #e64a19;
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-/* При наведенні робимо "вогонь" ще гарячішим */
 #btn_stop_algo:hover {
-    animation-duration: 0.5s; /* Пульсує вдвічі швидше */
-    cursor: pointer;
+    background-color: #f4511e; /* Трохи темнішає при наведенні */
+    border-color: #d84315;
+}
+
+#btn_stop_algo:active {
+    background-color: #e64a19;
 }
 
 

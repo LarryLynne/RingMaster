@@ -49,14 +49,25 @@ async function assignRingNames() {
         const response = await fetch(MATRIX_WEB_APP_URL);
         const matrixArray = await response.json();
         
-        // Перетворюємо масив у зручний словник: lookup["Чернігів_Черкаси"] = "1011"
+        // 2. Перетворюємо масив у зручний словник.
+        // ЩОБ ШУКАТИ ТІЛЬКИ ПО МІСТУ: проганяємо отримані дані через довідник, 
+        // щоб відсікти будь-які локації та залишити чисті міста.
         const matrixLookup = {};
         matrixArray.forEach(item => {
-            const key = `${String(item.origin).trim().toLowerCase()}_${String(item.dest).trim().toLowerCase()}`;
+            const originRaw = String(item.origin).trim();
+            const destRaw = String(item.dest).trim();
+            
+            const originData = nodeDictionary.get(originRaw) || { city: originRaw };
+            const destData = nodeDictionary.get(destRaw) || { city: destRaw };
+
+            const originCity = String(originData.city).trim().toLowerCase();
+            const destCity = String(destData.city).trim().toLowerCase();
+
+            const key = `${originCity}_${destCity}`;
             matrixLookup[key] = item.code;
         });
 
-        // 2. Збираємо всі затверджені кільця
+        // 3. Збираємо всі затверджені кільця
         const archiveMap = {};
         window.allTrips.forEach(t => {
             if (t.ringId && t.ringId.startsWith('approved_')) {
@@ -71,32 +82,38 @@ async function assignRingNames() {
             return;
         }
 
-        // 3. Лічильник для однакових кодів (щоб робити 01, 02, 03)
+        // 4. Лічильник для однакових кодів (щоб робити 01, 02, 03)
         const codeCounters = {};
 
-        // 4. Проходимося по кожному кільцю і даємо йому ім'я
+        // 5. Проходимося по кожному кільцю і даємо йому ім'я
         rings.forEach(ring => {
             const rId = ring[0].ringId;
             
-            // Сортуємо графіки хронологічно, щоб точно знайти ПЕРШИЙ рейс
+            // Сортуємо графіки хронологічно
             ring.sort((a, b) => {
                 if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
                 return a.trueStart - b.trueStart;
             });
 
-            const firstTrip = ring[0];
+            // ШУКАЄМО ТІЛЬКИ ПО МІСТУ: Знаходимо перший МІЖМІСЬКИЙ рейс. 
+            // Якщо першим стоїть локальний переїзд (Київ-Київ), ми його пропускаємо
+            let mainTrip = ring.find(t => {
+                let oCity = String(t.getPointName('origin', 'city')).trim().toLowerCase();
+                let dCity = String(t.getPointName('dest', 'city')).trim().toLowerCase();
+                return oCity !== dCity; 
+            });
             
-            // Беремо базове місто (без уточнень локацій), оскільки матриця по містах
-            const originCity = firstTrip.originData.city.trim().toLowerCase();
-            const destCity = firstTrip.destData.city.trim().toLowerCase();
+            // Якщо всі рейси в кільці локальні (в межах одного міста) — беремо перший
+            if (!mainTrip) mainTrip = ring[0];
+            
+            // Беремо базове місто (суворо функцією getPointName)
+            const originCity = String(mainTrip.getPointName('origin', 'city')).trim().toLowerCase();
+            const destCity = String(mainTrip.getPointName('dest', 'city')).trim().toLowerCase();
+            
             const lookupKey = `${originCity}_${destCity}`;
 
             // Шукаємо код
-            let baseCode = matrixLookup[lookupKey];
-            
-            if (!baseCode) {
-                baseCode = "XXXX"; // Якщо маршрут не знайдено в матриці
-            }
+            let baseCode = matrixLookup[lookupKey] || "XXXX";
 
             // Рахуємо, яке це по рахунку кільце з таким кодом
             if (!codeCounters[baseCode]) codeCounters[baseCode] = 0;
@@ -302,15 +319,25 @@ function handleFile(file) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = e => {
+        // НОВЕ: Зберігаємо сирі дані файлу, щоб брати чистий оригінал при кожному експорті
+        window.uploadedFileData = e.target.result; 
+        
         const data = new Uint8Array(e.target.result);
         const workbook = XLSX.read(data, { type: 'array' });
         const rows = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
         
-        // НОВЕ: Зберігаємо перші 4 рядки шапки (щоб при експортуванні відновити структуру)
         window.originalHeaders = rows.slice(0, 4);
 
-        // Далі йде твоє сортування і маппінг...
-        window.allTrips = rows.slice(4).filter(r => r[2]).map(r => new Trip(r));
+        // НОВЕ: Записуємо графіки, запам'ятовуючи їх оригінальний рядок в Excel
+        window.allTrips = [];
+        for (let i = 4; i < rows.length; i++) {
+            if (rows[i][2]) { // Перевірка наявності GRF
+                let t = new Trip(rows[i]);
+                t.originalRowIndex = i; // Зберігаємо оригінальний індекс рядка (0-based)
+                window.allTrips.push(t);
+            }
+        }
+
         window.allTrips.sort((a, b) => {
             if (a.trueStart !== b.trueStart) {
                 return a.trueStart - b.trueStart;
@@ -461,16 +488,57 @@ function switchTab(tabId) {
     if (tabId === 'stapler-draft-tab') renderStaplerDraft(); // НОВИЙ РЯДОК
 }
 
+// --- НОВА ЛОГІКА ІНТЕРФЕЙСУ ПОШУКУ ---
+function toggleAlgoSettings() {
+    const algo = document.getElementById('master_algo_select').value;
+    const patternBlock = document.getElementById('dynamic_pattern_settings');
+    const ppBlock = document.getElementById('dynamic_pp_settings');
 
-async function runShuttleAlgo() {
+    patternBlock.style.display = (algo === 'pattern') ? 'flex' : 'none';
+    ppBlock.style.display = (algo === 'pp') ? 'flex' : 'none';
+}
+
+async function runMasterAlgorithm() {
+    const algo = document.getElementById('master_algo_select').value;
+    
+    isAlgoRunning = true;
+    const btnRun = document.getElementById('btn_run_algo');
+    const btnStop = document.getElementById('btn_stop_algo');
+    
+    if (btnRun && btnStop) {
+        btnRun.style.display = 'none';
+        btnStop.style.display = 'inline-flex';
+    }
+
+    try {
+        // Мікро-пауза, щоб браузер встиг перемалювати кнопки до зависання розрахунками
+        await new Promise(resolve => setTimeout(resolve, 10));
+
+        if (['fifo', 'filo', 'tree', 'tree_opt'].includes(algo)) {
+            await runShuttleAlgo(algo); // Передаємо стратегію явно
+        } else if (algo === 'pattern') {
+            await runPatternAlgo();
+        } else if (algo === 'pp') {
+            await balanceDraftTrips();
+        }
+    } finally {
+        isAlgoRunning = false;
+        if (btnRun && btnStop) {
+            btnRun.style.display = 'inline-flex';
+            btnStop.style.display = 'none';
+        }
+        renderDraft();
+        render(window.allTrips);
+    }
+}
+
+async function runShuttleAlgo(strategy) {
     const mode = modeSelect.value;
     const repark = parseInt(reparkInput.value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
-    const strategy = document.getElementById('algo_strategy')?.value || 'fifo';
-
-    const requireReturn = document.getElementById('algo_return')?.checked || false;
-    //const fromVal = filterFrom.value;
-    //const toVal = filterTo.value;
+    
+    // Беремо галочку з нових глобальних налаштувань
+    const requireReturn = document.getElementById('global_return')?.checked || false;
 
     window.allTrips.forEach(t => { 
         if(t.ringId && t.ringId.startsWith('draft_')) t.ringId = null; 
@@ -497,67 +565,43 @@ async function runShuttleAlgo() {
         }
 
         if (!matchDirection) return false;
-
         if (autoVals.length > 0 && !autoVals.includes(t.auto)) return false;
         if (typeVals.length > 0 && !typeVals.includes(t.type)) return false;
 
         return true;
     });
 
-    // Вмикаємо режим роботи
-    isAlgoRunning = true;
-    const btnRun = document.getElementById('btn_run_algo');
-    const btnStop = document.getElementById('btn_stop_algo');
-    
-    if (btnRun && btnStop) {
-        btnRun.style.display = 'none';
-        btnStop.style.display = 'inline-block';
-    }
-
-    try {
-        if (strategy === 'fifo') {
-            algoFIFO(workingTrips, mode, repark, minTrips, requireReturn);
-        } else if (strategy === 'filo') {
-            algoFILO(workingTrips, mode, repark, minTrips, requireReturn);
-        } else if (strategy === 'tree') {
-            switchTab('draft-tab'); 
-            await algoTree(workingTrips, mode, repark, minTrips, requireReturn);
-        } else if (strategy === 'tree_opt') { 
-            switchTab('draft-tab'); 
-            await algoTreeOptimized(workingTrips, mode, repark, minTrips, requireReturn);
-        }
-    } finally {
-        // Гарантовано повертаємо кнопки у початковий стан, навіть якщо була помилка або зупинка
-        isAlgoRunning = false;
-        if (btnRun && btnStop) {
-            btnRun.style.display = 'inline-block';
-            btnStop.style.display = 'none';
-        }
-        renderDraft();
-        switchTab('draft-tab');
-        render(window.allTrips);
-        //document.getElementById('status').innerText = "Пошук завершено.";
-        //document.getElementById('status').innerText = `Доступно графіків: ${filtered.length} (всього завантажено: ${trips.length})`;
-       
+    if (strategy === 'fifo') {
+        await algoFIFO(workingTrips, mode, repark, minTrips, requireReturn);
+    } else if (strategy === 'filo') {
+        await algoFILO(workingTrips, mode, repark, minTrips, requireReturn);
+    } else if (strategy === 'tree') {
+        await algoTree(workingTrips, mode, repark, minTrips, requireReturn);
+    } else if (strategy === 'tree_opt') { 
+        await algoTreeOptimized(workingTrips, mode, repark, minTrips, requireReturn);
     }
 }
 
 // --- АЛГОРИТМ 1: FIFO (Швидкий човник А-Б-А) ---
-function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn) {
+async function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn) {
     let ringCounter = 0;
     for (let i = 0; i < workingTrips.length; i++) {
+        if (!isAlgoRunning) break; 
+        // Даємо браузеру "дихнути" кожні 50 ітерацій, щоб кнопка Стоп натискалася
+        if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
         let anchor = workingTrips[i];
         if (anchor.ringId !== null || anchor.logisticDay > 5) continue;
 
         const pointA = anchor.getPointName('origin', mode);
         const pointB = anchor.getPointName('dest', mode);
         let currentChain = [anchor];
-        anchor.ringId = 'temp'; // Тимчасово блокуємо
+        anchor.ringId = 'temp'; 
         let currentDest = pointB;
         let lastTrip = anchor;
         let searching = true;
 
-        while (searching) {
+        while (searching && isAlgoRunning) {
             const targetOrigin = currentDest;
             const targetDest = (currentDest === pointA) ? pointB : pointA;
             let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
@@ -566,7 +610,7 @@ function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn) {
 
             let nextTrip = workingTrips.find(candidate => {
                 const isCandidateEmpty = String(candidate.type || '').trim().toLowerCase() === "порожній";
-                if (isLastEmpty && isCandidateEmpty) return false; // Забороняємо 2 порожніх підряд
+                if (isLastEmpty && isCandidateEmpty) return false; 
                 return candidate.ringId === null && 
                        candidate.getPointName('origin', mode) === targetOrigin &&
                        candidate.getPointName('dest', mode) === targetDest &&
@@ -592,7 +636,7 @@ function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn) {
                     break;
                 }
                 let removed = currentChain.pop();
-                removed.ringId = null; // Повертаємо з 'temp'
+                removed.ringId = null; 
             }
         }
 
@@ -600,15 +644,18 @@ function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn) {
             const draftId = `draft_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => t.ringId = draftId);
         } else {
-            currentChain.forEach(t => t.ringId = null); // Знімаємо 'temp', якщо кільце закоротке
+            currentChain.forEach(t => t.ringId = null); 
         }
     }
 }
 
 // --- АЛГОРИТМ 2: FILO (Відкладений човник А-Б-А) ---
-function algoFILO(workingTrips, mode, repark, minTrips, requireReturn) {
+async function algoFILO(workingTrips, mode, repark, minTrips, requireReturn) {
     let ringCounter = 0;
     for (let i = 0; i < workingTrips.length; i++) {
+        if (!isAlgoRunning) break;
+        if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
         let anchor = workingTrips[i];
         if (anchor.ringId !== null || anchor.logisticDay > 4) continue;
 
@@ -620,7 +667,7 @@ function algoFILO(workingTrips, mode, repark, minTrips, requireReturn) {
         let lastTrip = anchor;
         let searching = true;
 
-        while (searching) {
+        while (searching && isAlgoRunning) {
             const targetOrigin = currentDest;
             const targetDest = (currentDest === pointA) ? pointB : pointA;
             let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
@@ -628,7 +675,7 @@ function algoFILO(workingTrips, mode, repark, minTrips, requireReturn) {
             const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
             let nextTrip = workingTrips.findLast(candidate => {
                 const isCandidateEmpty = String(candidate.type || '').trim().toLowerCase() === "порожній";
-                if (isLastEmpty && isCandidateEmpty) return false; // Забороняємо 2 порожніх підряд
+                if (isLastEmpty && isCandidateEmpty) return false; 
                 return candidate.ringId === null && 
                        candidate.getPointName('origin', mode) === targetOrigin &&
                        candidate.getPointName('dest', mode) === targetDest &&
@@ -1747,28 +1794,27 @@ function dragElement(elmnt) {
 // ЛОГІКА ПОШУКУ ЗА ШАБЛОНОМ
 // ==========================================
 
+// --- АЛГОРИТМ ПОШУКУ ЗА ШАБЛОНОМ ---
 async function runPatternAlgo() {
     const rawPattern = document.getElementById('pattern_input').value;
-    const requireReturn = document.getElementById('pattern_return').checked;
-    const patternMode = document.getElementById('pattern_mode_select').value; // Отримуємо режим зчіпки
+    const requireReturn = document.getElementById('global_return')?.checked || false;
+    const mode = document.getElementById('mode_select').value; 
     
-    // Парсимо рядок (розділяємо по дефісах, прибираємо пробіли)
-    const patternNodes = rawPattern.split('-').map(s => s.trim()).filter(Boolean);
+    // Переводимо весь шаблон у нижній регістр і чистимо пробіли для надійності
+    const patternNodes = rawPattern.split('-').map(s => s.trim().toLowerCase()).filter(Boolean);
     
     if (patternNodes.length < 2) {
         alert("Введіть хоча б два міста, наприклад: Київ - Полтава");
         return;
     }
 
-    const repark = parseInt(reparkInput.value) || 0;
+    const repark = parseInt(document.getElementById('repark_time').value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
 
-    // Очищаємо старі незбережені чернетки
     window.allTrips.forEach(t => { 
         if(t.ringId && t.ringId.startsWith('draft_')) t.ringId = null; 
     });
 
-    // Беремо глобальні фільтри
     const autoVals = Array.from(activeFilters.auto);
     const typeVals = Array.from(activeFilters.type);
 
@@ -1779,17 +1825,21 @@ async function runPatternAlgo() {
         return true;
     });
 
-    isAlgoRunning = true;
     let ringCounter = 0;
     const patternLength = patternNodes.length;
 
     for (let i = 0; i < workingTrips.length; i++) {
+        if (!isAlgoRunning) break; 
+        if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
         let anchor = workingTrips[i];
         if (anchor.ringId !== null || anchor.logisticDay > 4) continue;
 
-        // ФІЛЬТР 1: Якір має чітко збігатися з першими двома пунктами шаблону САМЕ ПО МІСТАХ
-        if (anchor.getPointName('origin', 'city').toLowerCase() !== patternNodes[0].toLowerCase() ||
-            anchor.getPointName('dest', 'city').toLowerCase() !== patternNodes[1].toLowerCase()) {
+        // БЕЗПЕЧНА ПЕРЕВІРКА ЯКОРЯ (Чистимо від пробілів та регістру)
+        const anchorOriginCity = String(anchor.getPointName('origin', 'city')).trim().toLowerCase();
+        const anchorDestCity = String(anchor.getPointName('dest', 'city')).trim().toLowerCase();
+
+        if (anchorOriginCity !== patternNodes[0] || anchorDestCity !== patternNodes[1]) {
             continue;
         }
 
@@ -1799,7 +1849,7 @@ async function runPatternAlgo() {
         let searching = true;
         let step = 1; 
 
-        while (searching) {
+        while (searching && isAlgoRunning) {
             let nextOriginIdx = step % patternLength;
             let nextDestIdx = (step + 1) % patternLength;
             
@@ -1808,24 +1858,22 @@ async function runPatternAlgo() {
 
             let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
             
-            // НОВЕ: Беремо точку призначення попереднього рейсу у вибраному режимі зчіпки
-            let requiredOriginPoint = lastTrip.getPointName('dest', patternMode);
+            let requiredOriginPoint = lastTrip.getPointName('dest', mode);
             const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
-            // Шукаємо наступний рейс
+            
             let nextTrip = workingTrips.find(c => {
                 const isCandidateEmpty = String(c.type || '').trim().toLowerCase() === "порожній";
-                if (isLastEmpty && isCandidateEmpty) return false; // Відсікаємо порожні підряд
+                if (isLastEmpty && isCandidateEmpty) return false; 
+                
+                // Безпечне отримання міст кандидата
+                const cOriginCity = String(c.getPointName('origin', 'city')).trim().toLowerCase();
+                const cDestCity = String(c.getPointName('dest', 'city')).trim().toLowerCase();
+
                 return c.ringId === null &&
-                       c.auto === anchor.auto && // Той самий тип авто
-                       
-                       // 1. Відповідність місту з шаблону (перевіряємо глобальний напрямок)
-                       c.getPointName('origin', 'city').toLowerCase() === targetCityOrigin.toLowerCase() &&
-                       c.getPointName('dest', 'city').toLowerCase() === targetCityDest.toLowerCase() &&
-                       
-                       // 2. Жорстка зчіпка за обраним режимом (Вузол/Місто/Локація)
-                       c.getPointName('origin', patternMode) === requiredOriginPoint &&
-                       
-                       // 3. Відповідність часу з урахуванням перепарковки
+                       c.auto === anchor.auto && 
+                       cOriginCity === targetCityOrigin &&
+                       cDestCity === targetCityDest &&
+                       c.getPointName('origin', mode) === requiredOriginPoint &&
                        c.trueStart > lastTrip.trueStart &&
                        c.trueStart >= (effectiveLastEnd + repark);
             });
@@ -1840,32 +1888,26 @@ async function runPatternAlgo() {
             }
         }
 
-        // Обрізка "хвоста", якщо увімкнено "З поверненням"
+        // БЕЗПЕЧНА ПЕРЕВІРКА ПОВЕРНЕННЯ
         if (requireReturn) {
             while (currentChain.length > 0) {
                 let last = currentChain[currentChain.length - 1];
-                // Перевіряємо за містом, бо шаблон ми пишемо містами
-                if (last.getPointName('dest', 'city').toLowerCase() === patternNodes[0].toLowerCase()) {
+                let lastDestCity = String(last.getPointName('dest', 'city')).trim().toLowerCase();
+                if (lastDestCity === patternNodes[0]) {
                     break;
                 }
                 let removed = currentChain.pop();
-                removed.ringId = null; // Повертаємо рейс у вільний доступ
+                removed.ringId = null; 
             }
         }
 
-        // Записуємо кільце, якщо воно відповідає мінімальній довжині
         if (currentChain.length >= minTrips) {
             const draftId = `draft_pattern_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => t.ringId = draftId);
         } else {
-            // Скидаємо temp статуси, якщо ланцюг вийшов занадто коротким
             currentChain.forEach(t => t.ringId = null);
         }
     }
-
-    isAlgoRunning = false;
-    renderDraft();
-    render(window.allTrips);
 }
 
 function runAutoStapler() {
@@ -2125,9 +2167,22 @@ function exportToExcel() {
         return;
     }
 
-    const mode = document.getElementById('mode_select').value;
+    if (!window.uploadedFileData) {
+        alert("Оригінальний файл не знайдено в пам'яті. Завантажте файл знову.");
+        return;
+    }
 
-    // 1. Нумерація затверджених кілець
+    // Читаем файл с параметрами для максимального сохранения форматов чисел и дат
+    const data = new Uint8Array(window.uploadedFileData);
+    const wb = XLSX.read(data, { type: 'array', cellStyles: true, cellNF: true }); 
+    const wsName = wb.SheetNames[0];
+    const ws = wb.Sheets[wsName];
+    
+    // Отримуємо межі оригінальної таблиці
+    let range = XLSX.utils.decode_range(ws['!ref']);
+    const newColIndex = range.e.c + 1; 
+
+    // 2. Нумерація затверджених кілець
     const approvedRings = new Set();
     window.allTrips.forEach(t => {
         if (t.ringId && t.ringId.startsWith('approved_')) {
@@ -2141,73 +2196,71 @@ function exportToExcel() {
         ringNumberMap[id] = ringCounter++;
     });
 
-    // 2. Формуємо шапку (те, що користувач бачить на екрані + 2 нові колонки)
-    const headers = [
-        "GRF", "Цифра", "Код", "Група", "Наряд", "Тип", "Авто", "ФЗ", "Маршрут",
-        "Відпр", "Отр", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд",
-        "Водії", "Дедл", "Подача", "Виїзд", "Приїзд", "Вільний", "Комент",
-        "Номер кільця", "Номер графіка"
-    ];
+    // 3. Записуємо заголовок колонки у 4-й рядок
+    XLSX.utils.sheet_add_aoa(ws, [["Номер кільця"]], { origin: { r: 3, c: newColIndex } });
 
-    const exportData = [headers];
-
-    // Допоміжна функція: перетворює "HH:MM" у дробове число, яке Excel розуміє як час
+    // ДОПОМІЖНА ФУНКЦІЯ: перетворює "HH:MM" у дробове число для Excel
     const timeToExcelFraction = (timeStr) => {
         if (!timeStr) return "";
         const [h, m] = timeStr.split(':').map(Number);
-        if (isNaN(h) || isNaN(m)) return timeStr; // Якщо раптом там текст
+        if (isNaN(h) || isNaN(m)) return timeStr;
         return (h * 60 + m) / 1440;
     };
 
-    // 3. Збираємо дані по кожному графіку
+    // 4. Розподіляємо дані
+    const emptyTripsData = []; 
+    
     window.allTrips.forEach(t => {
-        const row = [
-            t.grf || "", t.digit || "", t.code || "", t.group || "", t.naryad || "",
-            t.type || "", t.auto || "", t.load || "", t.route || "",
-            t.getPointName('origin', mode), t.getPointName('dest', mode),
-            ...t.logDays.map(d => d === '+' ? '+' : ''),
-            t.drivers || "", t.deadline || "",
+        let ringName = "";
+        if (t.ringId && t.ringId.startsWith('approved_')) {
+            ringName = window.ringNamesMap[t.ringId] || ringNumberMap[t.ringId];
+        }
+
+        if (t.originalRowIndex !== undefined) {
+            // Оригінальний графік - точково записуємо номер в його ж рядок
+            XLSX.utils.sheet_add_aoa(ws, [[ringName]], { origin: { r: t.originalRowIndex, c: newColIndex } });
+        } else {
+            // Це віртуальний порожній перегон
+            let newRow = [...t.rawRow];
             
-            // Перетворюємо час
-            timeToExcelFraction(t.podachaStr),
-            timeToExcelFraction(t.depStr),
-            timeToExcelFraction(t.arrStr),
-            timeToExcelFraction(t.freeStr),
+            // ПЕРЕТВОРЮЄМО ЧАС З ТЕКСТУ В ЧИСЛА EXCEL
+            newRow[32] = timeToExcelFraction(t.podachaStr);
+            newRow[33] = timeToExcelFraction(t.depStr);
+            newRow[40] = timeToExcelFraction(t.arrStr);
+            newRow[41] = timeToExcelFraction(t.freeStr);
+
+            // Добиваємо рядок порожніми комірками до нової колонки
+            while (newRow.length < newColIndex) {
+                newRow.push("");
+            }
+            newRow[newColIndex] = ringName; 
             
-            t.comment || "",
-            
-            // Номер кільця (якщо затверджено)
-            (t.ringId && t.ringId.startsWith('approved_')) ? (window.ringNamesMap[t.ringId] || ringNumberMap[t.ringId]) : "",
-            
-            // Номер графіка (поки порожньо)
-            ""
-        ];
-        exportData.push(row);
+            emptyTripsData.push(newRow);
+        }
     });
 
-    // 4. Створюємо аркуш
-    const ws = XLSX.utils.aoa_to_sheet(exportData);
-
-    // 5. Застосовуємо форматування часу до колонок Подача(20), Виїзд(21), Приїзд(22), Вільний(23)
-    const timeColIndices = [20, 21, 22, 23];
-    const range = XLSX.utils.decode_range(ws['!ref']);
-    
-    // Проходимося по всіх рядках, крім шапки (R=0)
-    for (let R = 1; R <= range.e.r; ++R) {
-        timeColIndices.forEach(C => {
-            const cellAddress = XLSX.utils.encode_cell({r: R, c: C});
-            const cell = ws[cellAddress];
-            
-            // Якщо клітинка існує і є числом (долею доби) — вішаємо маску часу
-            if (cell && typeof cell.v === 'number') {
-                cell.z = 'hh:mm';
-            }
-        });
+    // 5. Дописуємо віртуальні перегони в самий низ і вішаємо на них маску часу
+    if (emptyTripsData.length > 0) {
+        const startEmptyRow = range.e.r + 1;
+        XLSX.utils.sheet_add_aoa(ws, emptyTripsData, { origin: { r: startEmptyRow, c: 0 } });
+        
+        // ПРИМУСОВО задаємо маску часу "ГГ:ХВ" для доданих комірок
+        for (let i = 0; i < emptyTripsData.length; i++) {
+            const R = startEmptyRow + i;
+            [32, 33, 40, 41].forEach(C => {
+                const cellAddress = XLSX.utils.encode_cell({r: R, c: C});
+                if (ws[cellAddress] && typeof ws[cellAddress].v === 'number') {
+                    ws[cellAddress].z = 'hh:mm';
+                }
+            });
+        }
     }
 
-    // 6. Формуємо та завантажуємо файл
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Експорт");
+    // 6. Оновлюємо внутрішні межі аркуша
+    const maxRow = range.e.r + emptyTripsData.length;
+    ws['!ref'] = XLSX.utils.encode_range({s: {r:0, c:0}, e: {r: maxRow, c: newColIndex}});
+
+    // 7. Зберігаємо файл
     XLSX.writeFile(wb, "Кольцмейстер_Експорт.xlsx");
 }
 
@@ -2642,29 +2695,55 @@ function createVirtualEmptyTrip(originNode, destNode, startMins, durationMins, a
     vTrip.trueEnd = startMins + durationMins;
     
     // Оновлюємо внутрішні хвилини, щоб спливаючі підказки при наведенні працювали коректно
-    vTrip.podachaInt = startMins;
+    vTrip.podachaInt = startMins - 1;
     vTrip.depInt = startMins;
     vTrip.arrInt = startMins + durationMins;
-    vTrip.freeInt = startMins + durationMins;
+    vTrip.freeInt = startMins + durationMins + 1;
     
     // Форматуємо час суворо як "ГГ:ХВ" (без днів тижня)
     const formatVirtualTime = (totalMins) => {
-        let h = Math.floor((totalMins % 1440) / 60).toString().padStart(2, '0');
-        let m = (Math.round(totalMins) % 60).toString().padStart(2, '0');
+        // Додаємо 10080 (хвилин у тижні), щоб -1 хвилина коректно відобразилась як 23:59 попереднього дня
+        let safeMins = (totalMins + 10080) % 10080; 
+        let h = Math.floor((safeMins % 1440) / 60).toString().padStart(2, '0');
+        let m = (Math.round(safeMins) % 60).toString().padStart(2, '0');
         return `${h}:${m}`;
     };
 
-    vTrip.podachaStr = formatVirtualTime(vTrip.trueStart);
-    vTrip.depStr = formatVirtualTime(vTrip.trueStart);
-    vTrip.arrStr = formatVirtualTime(vTrip.trueEnd);
-    vTrip.freeStr = formatVirtualTime(vTrip.trueEnd);
+    vTrip.podachaStr = formatVirtualTime(vTrip.podachaInt);
+    vTrip.depStr = formatVirtualTime(vTrip.depInt);
+    vTrip.arrStr = formatVirtualTime(vTrip.arrInt);
+    vTrip.freeStr = formatVirtualTime(vTrip.freeInt);
     
     vTrip.comment = "🤖 Авто-перегон";
     return vTrip;
 }
 
+function findLoadedConnection(lastTrip, availableTrips, reparkMins, mode) {
+    let targetOrigin = lastTrip.getPointName('dest', mode);
+    let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+    const isLastEmpty = String(lastTrip.type || '').trim().toLowerCase() === "порожній";
+
+    let candidates = availableTrips.filter(c => {
+        const isCandidateEmpty = String(c.type || '').trim().toLowerCase() === "порожній";
+        if (isLastEmpty && isCandidateEmpty) return false;
+
+        return c.ringId === null &&
+               c.auto === lastTrip.auto &&
+               c.getPointName('origin', mode) === targetOrigin &&
+               c.trueStart >= (effectiveLastEnd + reparkMins) &&
+               (c.trueStart - effectiveLastEnd) <= (24 * 60); // Максимум 24 год очікування
+    });
+
+    if (candidates.length > 0) {
+        // Сортуємо хронологічно, щоб брати найближчий за часом
+        candidates.sort((a, b) => a.trueStart - b.trueStart);
+        return candidates[0]; 
+    }
+    return null;
+}
+
 // 3. Основне ядро балансування (повертає знайдений перегон + наступний графік або null)
-function findEmptyConnection(lastTrip, availableTrips, reparkMins) {
+function findEmptyConnection(lastTrip, availableTrips, reparkMins, returnToOrigin = false) {
     // Захист від двох порожніх підряд
     if (String(lastTrip.type || '').trim().toLowerCase() === "порожній") return null;
 
@@ -2672,8 +2751,15 @@ function findEmptyConnection(lastTrip, availableTrips, reparkMins) {
     let originNode = lastTrip.destination; // Сирий вузол з довідника
     let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
 
-    let priorities = window.emptiesPriorities[originCity];
-    if (!priorities || priorities.length === 0) return null;
+    let priorities = [];
+    if (returnToOrigin) {
+        // РЕЖИМ "ДОДОМУ": Шукаємо наступний рейс з міста, з якого виїхав попередній
+        priorities = [lastTrip.getPointName('origin', 'city')];
+    } else {
+        // РЕЖИМ МАТРИЦІ: Беремо пріоритети з довідника
+        priorities = window.emptiesPriorities[originCity];
+        if (!priorities || priorities.length === 0) return null;
+    }
 
     // Перебираємо міста в порядку пріоритету
     for (let targetCity of priorities) {
@@ -2721,6 +2807,7 @@ function findEmptyConnection(lastTrip, availableTrips, reparkMins) {
 // 4. ІНСТРУМЕНТ 1: Докільцювати затверджені кільця
 function balanceApprovedRings() {
     const repark = parseInt(reparkInput.value) || 0;
+    const mode = modeSelect.value;
     let extendedCount = 0;
 
     const archiveMap = {};
@@ -2745,18 +2832,30 @@ function balanceApprovedRings() {
 
         while (searching) {
             let lastTrip = currentChain[currentChain.length - 1];
-            let connection = findEmptyConnection(lastTrip, availableTrips, repark);
+            
+            // 1. Спочатку шукаємо вантаж
+            let loadedNext = findLoadedConnection(lastTrip, availableTrips, repark, mode);
 
-            if (connection) {
-                connection.virtualTrip.ringId = 'temp';
-                connection.nextTrip.ringId = 'temp';
-                currentChain.push(connection.virtualTrip, connection.nextTrip);
-                
-                // Оновлюємо список доступних (видаляємо той, що щойно забрали)
-                availableTrips = availableTrips.filter(t => t.id !== connection.nextTrip.id);
+            if (loadedNext) {
+                loadedNext.ringId = 'temp';
+                currentChain.push(loadedNext);
+                // Видаляємо з пулу доступних
+                availableTrips = availableTrips.filter(t => t.id !== loadedNext.id);
                 addedNew = true;
             } else {
-                searching = false;
+                // 2. Потім шукаємо перегон (поки без галочки "додому", за матрицею)
+                let connection = findEmptyConnection(lastTrip, availableTrips, repark, false); 
+                
+                if (connection) {
+                    connection.virtualTrip.ringId = 'temp';
+                    connection.nextTrip.ringId = 'temp';
+                    currentChain.push(connection.virtualTrip, connection.nextTrip);
+                    // Видаляємо наступний рейс з пулу доступних
+                    availableTrips = availableTrips.filter(t => t.id !== connection.nextTrip.id);
+                    addedNew = true;
+                } else {
+                    searching = false;
+                }
             }
         }
 
@@ -2765,7 +2864,6 @@ function balanceApprovedRings() {
             currentChain.forEach(t => {
                 if (t.ringId !== 'temp') t.originalRingId = t.ringId; 
                 t.ringId = newDraftId;
-                // Якщо це віртуальний рейс, додаємо його в глобальний масив
                 if (t.grf.startsWith('EMPTY_') && !window.allTrips.includes(t)) {
                     window.allTrips.push(t);
                 }
@@ -2779,19 +2877,25 @@ function balanceApprovedRings() {
         switchTab('draft-tab');
         render(window.allTrips);
     } else {
-        alert("Не вдалося знайти балансувальних перегонів для існуючих кілець.");
+        alert("Не вдалося знайти продовжень (ані вантажних, ані порожніх) для існуючих кілець.");
     }
 }
 
 // 5. ІНСТРУМЕНТ 2: Склеїти залишки в нові кільця
-function balanceDraftTrips() {
+async function balanceDraftTrips() {
     const repark = parseInt(reparkInput.value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
+    const returnMode = document.getElementById('empty_return_mode')?.checked || false; 
+    const mode = modeSelect.value; 
     let ringCounter = 0;
 
     let workingTrips = window.allTrips.filter(t => t.ringId === null);
 
     for (let i = 0; i < workingTrips.length; i++) {
+        if (!isAlgoRunning) break; // Реакція на кнопку СТОП
+
+        if (i % 50 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+
         let anchor = workingTrips[i];
         if (anchor.ringId !== null) continue;
 
@@ -2799,21 +2903,28 @@ function balanceDraftTrips() {
         anchor.ringId = 'temp';
         let searching = true;
 
-        while (searching) {
+        while (searching && isAlgoRunning) {
             let lastTrip = currentChain[currentChain.length - 1];
-            // Шукаємо серед ТИХ, ЩО ЗАЛИШИЛИСЬ
-            let connection = findEmptyConnection(lastTrip, workingTrips.filter(t => t.ringId === null), repark);
+            let freeTrips = workingTrips.filter(t => t.ringId === null);
+            
+            let loadedNext = findLoadedConnection(lastTrip, freeTrips, repark, mode);
 
-            if (connection) {
-                connection.virtualTrip.ringId = 'temp';
-                connection.nextTrip.ringId = 'temp';
-                currentChain.push(connection.virtualTrip, connection.nextTrip);
+            if (loadedNext) {
+                loadedNext.ringId = 'temp';
+                currentChain.push(loadedNext);
             } else {
-                searching = false;
+                let connection = findEmptyConnection(lastTrip, freeTrips, repark, returnMode);
+
+                if (connection) {
+                    connection.virtualTrip.ringId = 'temp';
+                    connection.nextTrip.ringId = 'temp';
+                    currentChain.push(connection.virtualTrip, connection.nextTrip);
+                } else {
+                    searching = false;
+                }
             }
         }
 
-        // Мінімальна кількість графіків (реальні + перегони)
         if (currentChain.length >= minTrips) {
             const draftId = `draft_bal_new_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => {
@@ -2823,13 +2934,9 @@ function balanceDraftTrips() {
                 }
             });
         } else {
-            // Розбираємо ланцюг, якщо не вистачило довжини (віртуальні зникнуть самі)
             currentChain.forEach(t => t.ringId = null);
         }
     }
-
-    renderDraft();
-    render(window.allTrips);
 }
 
 function cleanOrphanedEmpties() {
@@ -2970,6 +3077,9 @@ function toggleSidebarAuto(auto) {
     updateSidebarAutoButtons();
     updateDraftImbalanceStats(); // Одразу перемальовуємо таблицю
 }
+
+
+
 
 loadDictionary();
 loadBalancingData();
