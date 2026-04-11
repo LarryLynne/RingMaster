@@ -3132,5 +3132,15 @@ function sendFeedback() {
         });
 }
 
+window.addEventListener('beforeunload', function (e) {
+    // Включаем защиту только если пользователь уже загрузил файл (массив allTrips не пустой).
+    // Нет смысла бесить человека табличкой, если он зашел на пустой сайт и сразу выходит.
+    if (window.allTrips && window.allTrips.length > 0) {
+        // Эти две строчки — магия, которая заставляет браузер показать окно подтверждения
+        e.preventDefault(); 
+        e.returnValue = ''; 
+    }
+});
+
 loadDictionary();
 loadBalancingData();
