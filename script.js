@@ -3078,7 +3078,13 @@ function toggleSidebarAuto(auto) {
     updateDraftImbalanceStats(); // Одразу перемальовуємо таблицю
 }
 
-
+window.addEventListener('DOMContentLoaded', () => {
+    const notifyUrl = WEB_APP_URL + '?action=notifyVisit';
+    
+    // Добавили { mode: 'no-cors' }
+    fetch(notifyUrl, { mode: 'no-cors' })
+        .catch(e => console.log("Уведомление не ушло, ну и ладно"));
+});
 
 
 loadDictionary();
