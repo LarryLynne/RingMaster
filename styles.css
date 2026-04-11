@@ -451,7 +451,7 @@ input[type="checkbox"] {
 /* ========================================== */
 /* ЕДИНЫЙ СТИЛЬ КНОПОК */
 /* ========================================== */
-.action-btn, .danger-btn, .success-btn, .warning-btn {
+.action-btn, .danger-btn, .success-btn, .warning-btn, .feedback-btn {
     height: 30px;
     
     padding: 0 15px;
@@ -466,6 +466,20 @@ input[type="checkbox"] {
     justify-content: center;
     outline: none;
     user-select: none;
+}
+
+/* Фіолетовий (Зворотній зв'язок) */
+.feedback-btn {
+    background-color: #f3e8ff; 
+    color: #7e22ce;
+    border: 1px solid #9333ea;
+}
+.feedback-btn:hover { 
+    background-color: #e9d5ff; 
+}
+.feedback-btn:active { 
+    background-color: #d8b4fe; 
+    border-color: #7e22ce; 
 }
 
 /* Синий (Поиск / Степлер / Редактировать) */

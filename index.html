@@ -21,6 +21,7 @@
         <a href="https://docs.google.com/spreadsheets/d/1l9xS6gP40uBfc8LYdA0rhZmyW749w3ICFRdR9W77ZvY/edit?usp=sharing" target="_blank" class="action-btn" style="text-decoration: none;">⚙️ Налаштування</a>
         <button onclick="showTransitMatrix()" class="warning-btn">⏱ Матриця часу</button>
         <button onclick="forceUpdateBalancingData()" id="btn_update_matrix" class="action-btn">🔄 Оновити довідники</button>
+        <button onclick="openFeedbackModal()" class="feedback-btn">💬 Зворотній зв'язок</button>
         <div id="status" class="status-msg">Очікування довідника...</div>
     </div>
 
@@ -387,6 +388,20 @@
             </div>
         </div>
     </div>
+
+    <div id="feedback-modal" class="missing-modal-overlay" style="display:none;">
+        <div class="missing-modal-content" style="width: 450px;">
+            <div class="missing-modal-header" style="background: #e8f0fe; color: #1a73e8; border-bottom: 1px solid #c1d7ff;">
+                <strong>💬 Зворотній зв'язок</strong>
+                <button class="danger-btn" onclick="closeFeedbackModal()" style="padding: 2px 6px; height: 24px;">❌</button>
+            </div>
+            <div class="missing-modal-body" style="padding: 15px; display: flex; flex-direction: column; gap: 15px;">
+                <textarea id="feedback-text" placeholder="Що б ви хотіли додати або змінити? Знайшли помилку? Напишіть сюди..." style="width: 100%; height: 120px; resize: vertical; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-family: inherit; font-size: 12px; box-sizing: border-box; outline: none;"></textarea>
+                <button onclick="sendFeedback()" id="btn-send-feedback" class="success-btn" style="align-self: flex-end; padding: 0 20px;">🚀 Надіслати</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js?v=3"></script>
     <script src="audit.js?v=1"></script>
 </body>

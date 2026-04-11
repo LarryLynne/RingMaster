@@ -3086,6 +3086,51 @@ window.addEventListener('DOMContentLoaded', () => {
         .catch(e => console.log("Уведомление не ушло, ну и ладно"));
 });
 
+// ==========================================
+// ЗВОРОТНІЙ ЗВ'ЯЗОК (FEEDBACK)
+// ==========================================
+function openFeedbackModal() {
+    document.getElementById('feedback-text').value = ''; // Очищаем поле
+    document.getElementById('feedback-modal').style.display = 'flex';
+}
+
+function closeFeedbackModal() {
+    document.getElementById('feedback-modal').style.display = 'none';
+}
+
+function sendFeedback() {
+    const textEl = document.getElementById('feedback-text');
+    const btn = document.getElementById('btn-send-feedback');
+    const text = textEl.value.trim();
+
+    if (!text) {
+        alert("Напишіть хоча б пару слів 😉");
+        return;
+    }
+
+    // Блокируем кнопку, чтобы не нажали дважды
+    btn.innerText = "⏳ Надсилаємо...";
+    btn.disabled = true;
+
+    // Формируем URL с текстом. encodeURIComponent нужен, чтобы пробелы и спецсимволы не сломали ссылку
+    const url = WEB_APP_URL + '?action=feedback&text=' + encodeURIComponent(text);
+
+    // Отправляем с флагом no-cors, чтобы избежать ошибок браузера
+    fetch(url, { mode: 'no-cors' })
+        .then(() => {
+            alert("Дякуємо! Ваше побажання відправлено розробнику 🚀");
+            closeFeedbackModal();
+        })
+        .catch(e => {
+            alert("Ой, щось пішло не так. Перевірте інтернет та спробуйте пізніше.");
+            console.error("Ошибка отправки фидбека:", e);
+        })
+        .finally(() => {
+            // Возвращаем кнопку в исходное состояние
+            btn.innerText = "🚀 Надіслати";
+            btn.disabled = false;
+        });
+}
 
 loadDictionary();
 loadBalancingData();
