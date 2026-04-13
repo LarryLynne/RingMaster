@@ -9,7 +9,7 @@ const MATRIX_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtRtzMPV6Oy
 // ==========================================
 // СКРОЛЛ ДЛЯ ЧИСЛОВИХ ПОЛІВ (Зміна значень коліщатком)
 // ==========================================
-['repark_time', 'min_trips'].forEach(id => {
+['repark_time', 'min_trips', 'audit_tolerance'].forEach(id => {
     const input = document.getElementById(id);
     if (input) {
         input.addEventListener('wheel', function(e) {

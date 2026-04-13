@@ -19,12 +19,32 @@ const auditFileInput = document.getElementById('audit_file_input');
     if(auditDropZone) auditDropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
 });
 
+let auditDragCounter = 0;
+
 if(auditDropZone) {
-    auditDropZone.addEventListener('dragenter', () => auditDropZone.classList.add('dragover'));
-    auditDropZone.addEventListener('dragover', () => auditDropZone.classList.add('dragover'));
-    auditDropZone.addEventListener('dragleave', () => auditDropZone.classList.remove('dragover'));
+    auditDropZone.addEventListener('dragenter', e => {
+        auditDragCounter++;
+        auditDropZone.classList.add('dragover');
+    });
+
+    auditDropZone.addEventListener('dragover', e => {
+        if (!auditDropZone.classList.contains('dragover')) {
+            auditDropZone.classList.add('dragover');
+        }
+    });
+
+    auditDropZone.addEventListener('dragleave', e => {
+        auditDragCounter--;
+        if (auditDragCounter === 0) {
+            auditDropZone.classList.remove('dragover');
+        }
+    });
+
     auditDropZone.onclick = () => auditFileInput.click();
+    
     auditDropZone.addEventListener('drop', e => {
+        // Обязательно сбрасываем счетчик при бросании файла
+        auditDragCounter = 0;
         auditDropZone.classList.remove('dragover');
         handleAuditFile(e.dataTransfer.files[0]);
     });
