@@ -919,10 +919,17 @@ function deleteRingFromDraft(draftRingId) {
 function clearDraft() {
     window.allTrips.forEach(t => {
         if (t.ringId && t.ringId.startsWith('draft_')) {
-            t.ringId = null;
+            // Відкат для докільцьованих/збалансованих кілець
+            if (t.originalRingId) {
+                t.ringId = t.originalRingId;
+                t.originalRingId = null;
+            } else {
+                t.ringId = null;
+            }
         }
     });
     cleanOrphanedEmpties(); // ПРИБИРАЄМО СМІТТЯ
+    renderArchive(); // Обов'язково перемальовуємо архів, щоб кільця туди повернулися
     render(window.allTrips);
     renderDraft(); // Перемалювати порожню чернетку
 }
@@ -1019,9 +1026,14 @@ function renderDraft() {
         const autoType = String(ring[0].auto || "").toUpperCase();
         const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
 
-        const isExtended = rId.includes('_ext_');
-        const titleText = isExtended ? `🔄 Докільцьований наряд #${idx + 1} (${ring[0].auto})` : `Наряд #${idx + 1} (${ring[0].auto})`;
-        const deleteBtnText = isExtended ? `❌ Відмінити докільцювання` : `🗑️ Видалити`;
+        // Визначаємо, чи витягнули ми це кільце з архіву
+        const isFromArchive = rId.includes('_ext_') || (rId.includes('_bal_') && !rId.includes('_new_'));
+        
+        let titleText = `Наряд #${idx + 1} (${ring[0].auto})`;
+        if (rId.includes('_ext_')) titleText = `🔄 Докільцьований наряд #${idx + 1} (${ring[0].auto})`;
+        if (rId.includes('_bal_') && !rId.includes('_new_')) titleText = `⚖️ Збалансований архівний наряд #${idx + 1} (${ring[0].auto})`;
+        
+        const deleteBtnText = isFromArchive ? `❌ Відмінити зміни` : `🗑️ Видалити`;
 
         return `
         <div class="ring-card" id="${rId}">
