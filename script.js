@@ -9,7 +9,7 @@ const MATRIX_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbwtRtzMPV6Oy
 // ==========================================
 // СКРОЛЛ ДЛЯ ЧИСЛОВИХ ПОЛІВ (Зміна значень коліщатком)
 // ==========================================
-['repark_time', 'min_trips', 'audit_tolerance'].forEach(id => {
+['repark_time', 'min_trips', 'min_km', 'archive_min_km', 'audit_tolerance'].forEach(id => {
     const input = document.getElementById(id);
     if (input) {
         input.addEventListener('wheel', function(e) {
@@ -227,6 +227,8 @@ class Trip {
         if (this.logisticDay === -1) this.logisticDay = 0;
 
         this.drivers = r[30]; this.deadline = r[31];
+
+        this.distance = parseFloat(r[46]) || 0;
         
         this.podachaStr = formatTime(r[32]);
         this.depStr = formatTime(r[33]);
@@ -259,27 +261,41 @@ class Trip {
     }
 
     calculateTimeline() {
-        const minInDay = 1440; const minInWeek = 10080;
+        const minInDay = 1440; 
+        const minInWeek = 10080;
         const dayStart = this.dayIndex * minInDay;
+
+        // Помічник для конвертації "ГГ:ХВ" у хвилини від початку доби
         const toMin = (str) => {
             if (!str) return 0;
             const [h, m] = str.split(':').map(Number);
             return (h * 60) + m;
         };
+
+        // 1. ВИЇЗД (Базова точка відліку для всього рейсу)
         const dM = toMin(this.depStr);
         this.depInt = dayStart + dM;
-        let pM = toMin(this.podachaStr);
+
+        // 2. ПОДАЧА (Час завантаження перед виїздом)
+        const pM = toMin(this.podachaStr);
         let pInt = dayStart + pM;
-        if (pM > dM) pInt -= minInDay;
+        if (pM > dM) pInt -= minInDay; // Якщо подача була ввечері попереднього дня
         this.podachaInt = pInt < 0 ? pInt + minInWeek : pInt;
-        let aM = toMin(this.arrStr);
+
+        // 3. ПРИЇЗД (Час фінішу рейсу на складі отримувача)
+        const aM = toMin(this.arrStr);
         let aInt = dayStart + aM;
-        if (aM < dM) aInt += minInDay;
+        if (aM < dM) aInt += minInDay; // Якщо приїзд відбувся вже на наступну добу
         this.arrInt = aInt >= minInWeek ? aInt - minInWeek : aInt;
-        let fM = toMin(this.freeStr);
-        let fInt = dayStart + fM;
-        if (fM < aM) fInt = aInt + (fM + minInDay - aM);
-        else if (aInt > (dayStart + minInDay)) fInt += minInDay;
+
+        // 4. ВІЛЬНИЙ (Час розвантаження — рахується строго від отриманого ПРИЇЗДУ)
+        const fM = toMin(this.freeStr);
+        let fInt = this.arrInt + (fM - aM);
+        
+        // Якщо перехід через північ (cross-midnight) стався безпосередньо під час розвантаження
+        if (fM < aM) fInt += minInDay; 
+        
+        // Фінальний захист від переходу на новий тиждень
         this.freeInt = fInt >= minInWeek ? fInt - minInWeek : fInt;
     }
 
@@ -705,6 +721,7 @@ async function runShuttleAlgo(strategy) {
     const mode = modeSelect.value;
     const repark = parseInt(reparkInput.value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
+    const minKm = parseInt(document.getElementById('min_km')?.value || 0);
     
     // Беремо галочку з нових глобальних налаштувань
     const requireReturn = document.getElementById('global_return')?.checked || false;
@@ -742,18 +759,18 @@ async function runShuttleAlgo(strategy) {
     });
 
     if (strategy === 'fifo') {
-        await algoFIFO(workingTrips, mode, repark, minTrips, requireReturn, allowEmpties);
+        await algoFIFO(workingTrips, mode, repark, minTrips, minKm, requireReturn, allowEmpties);
     } else if (strategy === 'filo') {
-        await algoFILO(workingTrips, mode, repark, minTrips, requireReturn, allowEmpties);
+        await algoFILO(workingTrips, mode, repark, minTrips, minKm, requireReturn, allowEmpties);
     } else if (strategy === 'tree') {
-        await algoTree(workingTrips, mode, repark, minTrips, requireReturn);
+        await algoTree(workingTrips, mode, repark, minTrips, minKm, requireReturn);
     } else if (strategy === 'tree_opt') { 
-        await algoTreeOptimized(workingTrips, mode, repark, minTrips, requireReturn);
+        await algoTreeOptimized(workingTrips, mode, repark, minTrips, minKm, requireReturn);
     }
 }
 
 // --- АЛГОРИТМ 1: FIFO (Швидкий човник А-Б-А + ПП) ---
-async function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn, allowEmpties) {
+async function algoFIFO(workingTrips, mode, repark, minTrips, minKm, requireReturn, allowEmpties) {
     let ringCounter = 0;
     for (let i = 0; i < workingTrips.length; i++) {
         if (!isAlgoRunning) break; 
@@ -813,16 +830,38 @@ async function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn, all
             }
         }
 
-        if (requireReturn) {
-            while (currentChain.length > 0) {
-                let last = currentChain[currentChain.length - 1];
-                if (last.getPointName('dest', mode) === pointA) break;
+        let validRing = false;
+        while (currentChain.length > 0 && !validRing) {
+            // 1. Відрізаємо хвости, якщо вимагається повернення додому
+            if (requireReturn) {
+                while (currentChain.length > 0) {
+                    let last = currentChain[currentChain.length - 1];
+                    if (last.getPointName('dest', mode) === pointA) break;
+                    let removed = currentChain.pop();
+                    removed.ringId = null; 
+                }
+            }
+
+            if (currentChain.length <= 1) break; // Захист від порожніх кілець
+
+            // 2. Перевіряємо нахлест між останнім рейсом та першим рейсом наступного кола
+            let lastTrip = currentChain[currentChain.length - 1];
+            let firstTrip = currentChain[0];
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            let nextCycleStart = firstTrip.trueStart + 10080; // Перенос на наступний тиждень
+
+            if (effectiveLastEnd + repark > nextCycleStart) {
+                // Є нахлест! Відрізаємо останній рейс (він ламає друге коло)
                 let removed = currentChain.pop();
                 removed.ringId = null; 
+                // Цикл while піде на нове коло: перевірить requireReturn для нового кінця і знову час
+            } else {
+                validRing = true; // Нахлесту немає, кільце замикається безпечно!
             }
         }
 
-        if (currentChain.length >= minTrips) {
+        let chainDist = currentChain.reduce((sum, t) => sum + (t.distance || 0), 0);
+        if (currentChain.length >= minTrips && chainDist >= minKm) {
             const draftId = `draft_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => {
                 t.ringId = draftId;
@@ -838,7 +877,7 @@ async function algoFIFO(workingTrips, mode, repark, minTrips, requireReturn, all
 }
 
 // --- АЛГОРИТМ 2: FILO (Відкладений човник А-Б-А + ПП) ---
-async function algoFILO(workingTrips, mode, repark, minTrips, requireReturn, allowEmpties) {
+async function algoFILO(workingTrips, mode, repark, minTrips, minKm, requireReturn, allowEmpties) {
     let ringCounter = 0;
     for (let i = 0; i < workingTrips.length; i++) {
         if (!isAlgoRunning) break;
@@ -899,16 +938,39 @@ async function algoFILO(workingTrips, mode, repark, minTrips, requireReturn, all
             }
         }
 
-        if (requireReturn) {
-            while (currentChain.length > 0) {
-                let last = currentChain[currentChain.length - 1];
-                if (last.getPointName('dest', mode) === pointA) break;
+        // --- ПЕРЕВІРКА ПОВЕРНЕННЯ ТА НАХЛЕСТУ (ЗАМИКАННЯ КІЛЬЦА) ---
+        let validRing = false;
+        while (currentChain.length > 0 && !validRing) {
+            // 1. Відрізаємо хвости, якщо вимагається повернення додому
+            if (requireReturn) {
+                while (currentChain.length > 0) {
+                    let last = currentChain[currentChain.length - 1];
+                    if (last.getPointName('dest', mode) === pointA) break;
+                    let removed = currentChain.pop();
+                    removed.ringId = null; 
+                }
+            }
+
+            if (currentChain.length <= 1) break; // Захист від порожніх кілець
+
+            // 2. Перевіряємо нахлест між останнім рейсом та першим рейсом наступного кола
+            let lastTrip = currentChain[currentChain.length - 1];
+            let firstTrip = currentChain[0];
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            let nextCycleStart = firstTrip.trueStart + 10080; // Перенос на наступний тиждень
+
+            if (effectiveLastEnd + repark > nextCycleStart) {
+                // Є нахлест! Відрізаємо останній рейс (він ламає друге коло)
                 let removed = currentChain.pop();
                 removed.ringId = null; 
+                // Цикл while піде на нове коло: перевірить requireReturn для нового кінця і знову час
+            } else {
+                validRing = true; // Нахлесту немає, кільце замикається безпечно!
             }
         }
 
-        if (currentChain.length >= minTrips) {
+        let chainDist = currentChain.reduce((sum, t) => sum + (t.distance || 0), 0);
+        if (currentChain.length >= minTrips && chainDist >= minKm) {
             const draftId = `draft_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => {
                 t.ringId = draftId;
@@ -923,7 +985,7 @@ async function algoFILO(workingTrips, mode, repark, minTrips, requireReturn, all
 }
 
 // --- АЛГОРИТМ 3: ДЕРЕВО (Транзит, пошук найдовшого ланцюга) ---
-async function algoTree(workingTrips, mode, repark, minTrips, requireReturn) {
+async function algoTree(workingTrips, mode, repark, minTrips, minKm, requireReturn) {
     let ringCounter = 0;
 
     for (let i = 0; i < workingTrips.length; i++) {
@@ -979,23 +1041,45 @@ async function algoTree(workingTrips, mode, repark, minTrips, requireReturn) {
         // Запускаємо асинхронну рекурсію (з await)
         await explore(anchor, [anchor]);
 
-        if (requireReturn) {
-            const startPoint = anchor.getPointName('origin', mode);
-            while (bestChain.length > 0) {
-                let last = bestChain[bestChain.length - 1];
-                if (last.getPointName('dest', mode) === startPoint) {
-                    break;
+        // --- ПЕРЕВІРКА ПОВЕРНЕННЯ ТА НАХЛЕСТУ (ЗАМИКАННЯ КІЛЬЦА) ---
+        let validRing = false;
+        const startPoint = anchor.getPointName('origin', mode);
+        
+        while (bestChain.length > 0 && !validRing) {
+            // 1. Відрізаємо хвости
+            if (requireReturn) {
+                while (bestChain.length > 0) {
+                    let last = bestChain[bestChain.length - 1];
+                    if (last.getPointName('dest', mode) === startPoint) break;
+                    let removed = bestChain.pop();
+                    removed.ringId = null;
                 }
-                bestChain.pop();
+            }
+
+            if (bestChain.length <= 1) break; 
+
+            // 2. Перевірка нахлесту при замиканні
+            let lastTrip = bestChain[bestChain.length - 1];
+            let firstTrip = bestChain[0];
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            let nextCycleStart = firstTrip.trueStart + 10080; 
+
+            if (effectiveLastEnd + repark > nextCycleStart) {
+                // Є нахлест! Відрізаємо.
+                let removed = bestChain.pop();
+                removed.ringId = null;
+            } else {
+                validRing = true; 
             }
         }
-        // Після виходу з рекурсії перевіряємо, чи не зупинили ми алгоритм
-        if (bestChain.length >= minTrips && isAlgoRunning) {
+        // Считаем общий километраж для лучшей найденной цепочки дерева
+        let chainDist = bestChain.reduce((sum, t) => sum + (t.distance || 0), 0);
+
+        if (bestChain.length >= minTrips && chainDist >= minKm && isAlgoRunning) {
             const draftId = `draft_${Date.now()}_${ringCounter++}`;
             bestChain.forEach(t => t.ringId = draftId);
             
             renderDraft(); 
-            // Пауза дає браузеру можливість "почути" клік по кнопці "Зупинити"
             await new Promise(resolve => setTimeout(resolve, 10)); 
         }
     }
@@ -1003,7 +1087,7 @@ async function algoTree(workingTrips, mode, repark, minTrips, requireReturn) {
 
 
 // --- АЛГОРИТМ 4: ОПТИМІЗОВАНЕ ДЕРЕВО (Beam Search + Max Wait) ---
-async function algoTreeOptimized(workingTrips, mode, repark, minTrips, requireReturn) {
+async function algoTreeOptimized(workingTrips, mode, repark, minTrips, minKm, requireReturn) {
     let ringCounter = 0;
     
     // НАЛАШТУВАННЯ АЛГОРИТМУ
@@ -1070,18 +1154,42 @@ async function algoTreeOptimized(workingTrips, mode, repark, minTrips, requireRe
 
         await explore(anchor, [anchor]);
 
-        if (requireReturn) {
-            const startPoint = anchor.getPointName('origin', mode);
-            while (bestChain.length > 0) {
-                let last = bestChain[bestChain.length - 1];
-                if (last.getPointName('dest', mode) === startPoint) {
-                    break;
+        // --- ПЕРЕВІРКА ПОВЕРНЕННЯ ТА НАХЛЕСТУ (ЗАМИКАННЯ КІЛЬЦА) ---
+        let validRing = false;
+        const startPoint = anchor.getPointName('origin', mode);
+        
+        while (bestChain.length > 0 && !validRing) {
+            // 1. Відрізаємо хвости
+            if (requireReturn) {
+                while (bestChain.length > 0) {
+                    let last = bestChain[bestChain.length - 1];
+                    if (last.getPointName('dest', mode) === startPoint) break;
+                    let removed = bestChain.pop();
+                    removed.ringId = null;
                 }
-                bestChain.pop();
+            }
+
+            if (bestChain.length <= 1) break; 
+
+            // 2. Перевірка нахлесту при замиканні
+            let lastTrip = bestChain[bestChain.length - 1];
+            let firstTrip = bestChain[0];
+            let effectiveLastEnd = lastTrip.trueEnd + (lastTrip.trueEnd < lastTrip.trueStart ? 10080 : 0);
+            let nextCycleStart = firstTrip.trueStart + 10080; 
+
+            if (effectiveLastEnd + repark > nextCycleStart) {
+                // Є нахлест! Відрізаємо.
+                let removed = bestChain.pop();
+                removed.ringId = null;
+            } else {
+                validRing = true; 
             }
         }
 
-        if (bestChain.length >= minTrips && isAlgoRunning) {
+        // Считаем километрику для оптимизированного дерева
+        let chainDist = bestChain.reduce((sum, t) => sum + (t.distance || 0), 0);
+
+        if (bestChain.length >= minTrips && chainDist >= minKm && isAlgoRunning) {
             const draftId = `draft_opt_${Date.now()}_${ringCounter++}`;
             bestChain.forEach(t => t.ringId = draftId);
             
@@ -1236,9 +1344,11 @@ function renderDraft() {
         // Визначаємо, чи витягнули ми це кільце з архіву
         const isFromArchive = rId.includes('_ext_') || (rId.includes('_bal_') && !rId.includes('_new_'));
         
-        let titleText = `Наряд #${idx + 1} (${ring[0].auto})`;
-        if (rId.includes('_ext_')) titleText = `🔄 Докільцьований наряд #${idx + 1} (${ring[0].auto})`;
-        if (rId.includes('_bal_') && !rId.includes('_new_')) titleText = `⚖️ Збалансований архівний наряд #${idx + 1} (${ring[0].auto})`;
+        const totalKm = ring.reduce((sum, t) => sum + (t.distance || 0), 0);
+        
+        let titleText = `Наряд #${idx + 1} (${ring[0].auto}) | ${totalKm} км`;
+        if (rId.includes('_ext_')) titleText = `🔄 Докільцьований наряд #${idx + 1} (${ring[0].auto}) | ${totalKm} км`;
+        if (rId.includes('_bal_') && !rId.includes('_new_')) titleText = `⚖️ Збалансований архівний наряд #${idx + 1} (${ring[0].auto}) | ${totalKm} км`;
         
         const deleteBtnText = isFromArchive ? `❌ Відмінити зміни` : `🗑️ Видалити`;
 
@@ -1352,19 +1462,25 @@ function renderArchive() {
     });
 
     const rings = Object.values(archiveMap);
+    
+    // Зчитуємо значення текстового пошуку та нового фільтра КМ
     const searchTerm = document.getElementById('archive_search')?.value.toLowerCase().trim() || "";
+    const minKmFilter = parseInt(document.getElementById('archive_min_km')?.value) || 0;
 
-    // Підготовлюємо масив з іменами, щоб не втратити оригінальну нумерацію при фільтрації
+    // Підготовлюємо масив з іменами ТА рахуємо загальний кілометраж для кожного кільця одразу
     let processedRings = rings.map((ring, idx) => {
         const rId = ring[0].ringId;
         const displayName = window.ringNamesMap[rId] ? window.ringNamesMap[rId] : `Затверджений наряд #${idx + 1}`;
-        return { ring, rId, displayName };
+        const totalKm = ring.reduce((sum, t) => sum + (t.distance || 0), 0);
+        return { ring, rId, displayName, totalKm };
     });
 
-    // Фільтруємо, якщо щось введено в поле пошуку
-    if (searchTerm) {
-        processedRings = processedRings.filter(item => item.displayName.toLowerCase().includes(searchTerm));
-    }
+    // ФІЛЬТРАЦІЯ: тепер кільце має проходити і по тексту, і по мінімальному КМ
+    processedRings = processedRings.filter(item => {
+        const matchSearch = item.displayName.toLowerCase().includes(searchTerm);
+        const matchKm = item.totalKm >= minKmFilter;
+        return matchSearch && matchKm;
+    });
 
     if (processedRings.length === 0) {
         document.getElementById('archive-content').innerHTML = '<div class="empty-msg" style="width:100%;">Поки що немає затверджених кілець або за вашим запитом нічого не знайдено.</div>';
@@ -1372,22 +1488,22 @@ function renderArchive() {
         return;
     }
 
+    // Рендеримо картки з уже відфільтрованого масиву processedRings
     archiveCardsHTML = processedRings.map((item) => {
-        const { ring, rId, displayName } = item;
+        const { ring, rId, displayName, totalKm } = item; // Забираємо вже порахований totalKm
         
         ring.sort((a, b) => {
             if (a.logisticDay !== b.logisticDay) return a.logisticDay - b.logisticDay;
             return a.trueStart - b.trueStart;
         });
 
-        // НОВОЕ: Определяем цвет шапки
         const autoType = String(ring[0].auto || "").toUpperCase();
         const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
 
         return `
         <div class="ring-card approved" id="${rId}">
             <div class="ring-header" style="background: ${headerBg};">
-                <strong>Наряд: ${displayName} (${ring[0].auto})</strong>
+                <strong>Наряд: ${displayName} (${ring[0].auto}) | ${totalKm} км</strong>
                 <div style="gap: 10px; display: flex;">
                     <button class="action-btn" onclick="openStapler('${rId}')">📎 Знайти пару</button>
                     <button class="action-btn" onclick="editRing('${rId}')">✏️ Редагувати</button>
@@ -2045,7 +2161,7 @@ async function runPatternAlgo() {
 
     const repark = parseInt(document.getElementById('repark_time').value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
-
+    const minKm = parseInt(document.getElementById('min_km')?.value || 0);
     window.allTrips.forEach(t => { 
         if(t.ringId && t.ringId.startsWith('draft_')) t.ringId = null; 
     });
@@ -2136,7 +2252,8 @@ async function runPatternAlgo() {
             }
         }
 
-        if (currentChain.length >= minTrips) {
+        let chainDist = currentChain.reduce((sum, t) => sum + (t.distance || 0), 0);
+        if (currentChain.length >= minTrips && chainDist >= minKm) {
             const draftId = `draft_pattern_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => t.ringId = draftId);
         } else {
@@ -2303,11 +2420,11 @@ function renderStaplerDraft() {
         // НОВОЕ: Определяем цвет шапки
         const autoType = String(ring[0].auto || "").toUpperCase();
         const headerBg = autoType.includes("БДФ") ? "#c9fed8" : "#c1d7ff";
-
+        const totalKm = ring.reduce((sum, t) => sum + (t.distance || 0), 0);
         return `
         <div class="ring-card" id="${rId}" style="border: 2px solid #6f42c1 !important;">
             <div class="ring-header" style="background: ${headerBg};">
-                <strong>🤖 Мега-збірка #${idx + 1} (${ring[0].auto})</strong>
+                <strong>🤖 Мега-збірка #${idx + 1} (${ring[0].auto}) | ${totalKm} км</strong>
                 <div style="gap: 10px; display: flex;">
                     <button class="success-btn" onclick="approveStaplerRing('${rId}')">✔ Затвердити</button>
                     <button class="danger-btn" onclick="rejectStaplerRing('${rId}')">❌ Розбити назад</button>
@@ -3114,6 +3231,7 @@ function balanceApprovedRings() {
 async function balanceDraftTrips() {
     const repark = parseInt(reparkInput.value) || 0;
     const minTrips = parseInt(document.getElementById('min_trips')?.value || 4);
+    const minKm = parseInt(document.getElementById('min_km')?.value || 0);
     const returnMode = document.getElementById('empty_return_mode')?.checked || false; 
     const mode = modeSelect.value; 
     let ringCounter = 0;
@@ -3154,7 +3272,8 @@ async function balanceDraftTrips() {
             }
         }
 
-        if (currentChain.length >= minTrips) {
+        let chainDist = currentChain.reduce((sum, t) => sum + (t.distance || 0), 0);
+        if (currentChain.length >= minTrips && chainDist >= minKm) {
             const draftId = `draft_bal_new_${Date.now()}_${ringCounter++}`;
             currentChain.forEach(t => {
                 t.ringId = draftId;
