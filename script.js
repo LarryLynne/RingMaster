@@ -1210,20 +1210,39 @@ async function algoTreeOptimized(workingTrips, mode, repark, minTrips, minKm, re
 }*/
 
 function deleteRingFromDraft(draftRingId) {
+    // 1. 🌟 ДО ВИДАЛЕННЯ: Шукаємо сусіда в масиві чернетки
+    let neighborId = null;
+    const currentIndex = draftCardsHTML.findIndex(html => html.includes(`id="${draftRingId}"`));
+    
+    if (currentIndex !== -1) {
+        const neighborHtml = draftCardsHTML[currentIndex + 1] || draftCardsHTML[currentIndex - 1];
+        if (neighborHtml) {
+            const match = neighborHtml.match(/id="([^"]+)"/);
+            if (match) neighborId = match[1];
+        }
+    }
+
+    // 2. Видаляємо
     window.allTrips.forEach(t => {
         if (t.ringId === draftRingId) {
-            // Якщо це було розширене кільце з архіву - повертаємо старий ID
             if (t.originalRingId) {
                 t.ringId = t.originalRingId;
                 t.originalRingId = null;
             } else {
-                t.ringId = null; // Якщо це звичайний новий графік - викидаємо в реєстр
+                t.ringId = null; 
             }
         }
     });
-    cleanOrphanedEmpties(); // ПРИБИРАЄМО СМІТТЯ
+    cleanOrphanedEmpties(); 
+    
+    // 3. Перемальовуємо
     renderDraft();
-    renderArchive(); // Оновлюємо архів, бо туди могли повернутися кільця
+    renderArchive(); 
+    
+    // 4. 🌟 Скролимо до сусіда в чернетці з СИНЬОЮ підсвіткою!
+    if (neighborId) {
+        scrollToCard('draft-scroll', neighborId, draftCardsHTML, () => draftRenderedCount, loadMoreDrafts, 'rgba(26, 115, 232, 0.8)');
+    }
     
     if (document.getElementById('register-tab').classList.contains('active')) {
         render(window.allTrips);
@@ -1870,27 +1889,30 @@ function saveConstructorRing() {
     if (constructorRing.length === 0) return;
     
     const prefix = constructorOriginalStatus === 'approved' ? 'approved' : 'draft';
-    const newId = `${prefix}_${Date.now()}_manual`;
+    const newId = constructorEditingRingId || `${prefix}_${Date.now()}_manual`;
     
     constructorRing.forEach(t => t.ringId = newId);
     
     constructorRing = [];
     document.getElementById('constructor-tab-btn').style.display = 'none';
     
-    if (constructorOriginalStatus === 'approved') {
-        renderArchive();
-        switchTab('archive-tab');
-    } else {
-        renderDraft();
-        switchTab('draft-tab');
-    }
+    const wasApproved = (constructorOriginalStatus === 'approved');
 
-    // ==========================================
-    // НОВЕ: Скидаємо всі статуси і бекапи
     constructorOriginalStatus = 'draft'; 
     constructorEditingRingId = null;
     editingTripsBackup = [];
-    // ==========================================
+    
+    if (wasApproved) {
+        renderArchive();
+        switchTab('archive-tab');
+        // 🌟 ЗОЛОТИСТА ПІДСВІТКА ВІДРЕДАГОВАНОГО КІЛЬЦЯ В АРХІВІ:
+        scrollToCard('archive-scroll', newId, archiveCardsHTML, () => archiveRenderedCount, loadMoreArchives, 'rgba(255, 152, 0, 0.9)');
+    } else {
+        renderDraft();
+        switchTab('draft-tab');
+        // 🌟 ЗОЛОТИСТА ПІДСВІТКА В ЧЕРНЕТЦІ:
+        scrollToCard('draft-scroll', newId, draftCardsHTML, () => draftRenderedCount, loadMoreDrafts, 'rgba(255, 152, 0, 0.9)');
+    }
     
     render(window.allTrips); 
 }
@@ -2611,20 +2633,39 @@ function exportToExcel() {
 }
 
 function deleteRingFromArchive(archiveRingId) {
-    if (confirm("Ви впевнені, що хочете видалити цей затверджений наряд? Графіки повернуться в реєстр.")) {
-        window.allTrips.forEach(t => {
-            if (t.ringId === archiveRingId) t.ringId = null;
-        });
-        cleanOrphanedEmpties(); // ПРИБИРАЄМО СМІТТЯ
-        renderArchive();
-        
-        // Оновлюємо Реєстр, щоб графіки з'явилися там
-        if (document.getElementById('register-tab').classList.contains('active')) {
-            render(window.allTrips);
+    if (!confirm("Ви впевнені, що хочете видалити цей затверджений наряд? Графіки повернуться в реєстр.")) return;
+
+    // 1. 🌟 ДО ВИДАЛЕННЯ: Шукаємо ID сусіднього кільця (наступного або попереднього)
+    let neighborId = null;
+    const currentIndex = archiveCardsHTML.findIndex(html => html.includes(`id="${archiveRingId}"`));
+    
+    if (currentIndex !== -1) {
+        // Пріоритет: беремо наступне кільце (+1). Якщо видаляємо останнє — беремо попереднє (-1)
+        const neighborHtml = archiveCardsHTML[currentIndex + 1] || archiveCardsHTML[currentIndex - 1];
+        if (neighborHtml) {
+            const match = neighborHtml.match(/id="([^"]+)"/);
+            if (match) neighborId = match[1];
         }
     }
-}
 
+    // 2. Видаляємо кільце з бази
+    window.allTrips.forEach(t => {
+        if (t.ringId === archiveRingId) t.ringId = null;
+    });
+    cleanOrphanedEmpties(); 
+    
+    // 3. Перемальовуємо архів
+    renderArchive();
+    
+    // 4. 🌟 ПІСЛЯ ВИДАЛЕННЯ: Скролимо до сусіда і підсвічуємо його СИНІМ кольором!
+    if (neighborId) {
+        scrollToCard('archive-scroll', neighborId, archiveCardsHTML, () => archiveRenderedCount, loadMoreArchives, 'rgba(26, 115, 232, 0.8)');
+    }
+    
+    if (document.getElementById('register-tab').classList.contains('active')) {
+        render(window.allTrips);
+    }
+}
 // ==========================================
 // ЛОГІКА ДОКІЛЬЦЮВАННЯ ЗАТВЕРДЖЕНИХ КІЛЕЦЬ
 // ==========================================
@@ -3489,6 +3530,43 @@ window.addEventListener('beforeunload', function (e) {
         e.returnValue = ''; 
     }
 });
+
+// ==========================================
+// УНІВЕРСАЛЬНИЙ ПОМІЧНИК ДЛЯ ВІДНОВЛЕННЯ СКРОЛУ З ПІДСВІТКОЮ
+// ==========================================
+function scrollToCard(containerId, cardId, cardsHTMLArray, getRenderedCountFn, loadMoreFn, highlightColor = 'rgba(26, 115, 232, 0.8)') {
+    if (!cardId) return;
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    // 1. Шукаємо індекс нашої картки в масиві
+    const cardIndex = cardsHTMLArray.findIndex(html => html.includes(`id="${cardId}"`));
+
+    if (cardIndex !== -1) {
+        // 2. Підвантажуємо порції карток, поки наша картка не з'явиться в DOM
+        while (getRenderedCountFn() <= cardIndex && getRenderedCountFn() < cardsHTMLArray.length) {
+            loadMoreFn();
+        }
+
+        // 3. Даємо браузеру 100 мс на рендер DOM і плавно скролимо до елемента
+        setTimeout(() => {
+            const targetElement = document.getElementById(cardId);
+            if (targetElement) {
+                targetElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                
+                // 4. Робимо 1-секундну підсвітку заданим кольором
+                targetElement.style.transition = 'box-shadow 0.3s ease-in-out, transform 0.3s ease-in-out';
+                targetElement.style.boxShadow = `0 0 25px ${highlightColor}`;
+                targetElement.style.transform = 'scale(1.01)'; // Легке збільшення для акценту
+                
+                setTimeout(() => { 
+                    targetElement.style.boxShadow = ''; 
+                    targetElement.style.transform = ''; 
+                }, 1200); // Прибираємо ефект через 1.2 сек
+            }
+        }, 100);
+    }
+}
 
 loadDictionary();
 loadBalancingData();
