@@ -213,31 +213,32 @@ class Trip {
         this.grf = r[2]; this.digit = r[3]; this.code = r[4]; this.group = r[5];
         this.naryad = r[6]; this.type = r[7]; this.auto = r[8]; this.load = r[9];
         this.route = r[10]; this.origin = String(r[11] || "").trim();
-        this.destination = String(r[15] || "").trim();
+        this.destination = String(r[22] || "").trim(); // Зсув з 15 на 22
 
+        // ВІДНОВЛЕНІ РЯДКИ (без них падала помилка reading 'city')
         this.originData = nodeDictionary.get(this.origin) || { city: this.origin, city2: this.origin };
         this.destData = nodeDictionary.get(this.destination) || { city: this.destination, city2: this.destination };
 
-        const astroDays = [r[16], r[17], r[18], r[19], r[20], r[21], r[22]];
+        const astroDays = [r[23], r[24], r[25], r[26], r[27], r[28], r[29]];
         this.dayIndex = astroDays.findIndex(d => d === '+');
         if (this.dayIndex === -1) this.dayIndex = 0;
 
-        this.logDays = [r[23], r[24], r[25], r[26], r[27], r[28], r[29]];
+        this.logDays = [r[30], r[31], r[32], r[33], r[34], r[35], r[36]];
         this.logisticDay = this.logDays.findIndex(d=>d==="+");
         if (this.logisticDay === -1) this.logisticDay = 0;
 
-        this.drivers = r[30]; this.deadline = r[31];
+        this.drivers = r[37]; this.deadline = r[38];
 
-        this.distance = parseFloat(r[46]) || 0;
+        this.distance = parseFloat(r[74]) || 0;
         
-        this.podachaStr = formatTime(r[32]);
-        this.depStr = formatTime(r[33]);
-        this.arrStr = formatTime(r[40]);
-        this.freeStr = formatTime(r[41]);
+        this.podachaStr = formatTime(r[39]);
+        this.depStr = formatTime(r[40]);
+        this.arrStr = formatTime(r[61]);
+        this.freeStr = formatTime(r[62]);
 
         this.calculateTimeline();
         this.calculateTrueTimes();
-        this.comment = r[54];
+        this.comment = r[89];
         this.ringId = null;
         this.originalRingId = null; // НОВИЙ РЯДОК: Пам'ять для автостеплера
     }
@@ -403,9 +404,9 @@ function handleResumeFile(file) {
             ringColIndex = rows[3].findIndex(cell => String(cell).trim() === "Номер кільця");
         }
         
-        // Якщо раптом заголовок не знайшли, за замовчуванням беремо 55-й індекс (стандарт після експорту)
+        // Якщо раптом заголовок не знайшли, за замовчуванням беремо 96-й індекс (стандарт після експорту)
         if (ringColIndex === -1) {
-            ringColIndex = 55;
+            ringColIndex = 96;
         }
 
         for (let i = 4; i < rows.length; i++) {
@@ -2592,10 +2593,10 @@ function exportToExcel() {
             let newRow = [...t.rawRow];
             
             // ПЕРЕТВОРЮЄМО ЧАС З ТЕКСТУ В ЧИСЛА EXCEL
-            newRow[32] = timeToExcelFraction(t.podachaStr);
-            newRow[33] = timeToExcelFraction(t.depStr);
-            newRow[40] = timeToExcelFraction(t.arrStr);
-            newRow[41] = timeToExcelFraction(t.freeStr);
+            newRow[39] = timeToExcelFraction(t.podachaStr);
+            newRow[40] = timeToExcelFraction(t.depStr);
+            newRow[61] = timeToExcelFraction(t.arrStr);
+            newRow[62] = timeToExcelFraction(t.freeStr);
 
             // Добиваємо рядок порожніми комірками до нової колонки
             while (newRow.length < newColIndex) {
@@ -2615,7 +2616,7 @@ function exportToExcel() {
         // ПРИМУСОВО задаємо маску часу "ГГ:ХВ" для доданих комірок
         for (let i = 0; i < emptyTripsData.length; i++) {
             const R = startEmptyRow + i;
-            [32, 33, 40, 41].forEach(C => {
+            [39, 40, 61, 62].forEach(C => {
                 const cellAddress = XLSX.utils.encode_cell({r: R, c: C});
                 if (ws[cellAddress] && typeof ws[cellAddress].v === 'number') {
                     ws[cellAddress].z = 'hh:mm';
@@ -3053,13 +3054,13 @@ async function loadBalancingData() {
 
 // 2. Фабрика віртуальних перегонів
 function createVirtualEmptyTrip(originNode, destNode, startMins, durationMins, autoType) {
-    let dummyRow = new Array(55).fill("");
+    let dummyRow = new Array(97).fill("");
     dummyRow[2] = "EMPTY_" + Math.floor(Math.random() * 1000000); // GRF
     dummyRow[7] = "Порожній"; // Тип
     dummyRow[8] = autoType;   // Авто
     dummyRow[10] = `${originNode} - ${destNode}`; // Маршрут
     dummyRow[11] = originNode; // Відправник
-    dummyRow[15] = destNode;   // Отримувач
+    dummyRow[22] = destNode;   // Отримувач
     
     let shiftedMins = startMins - 720;
     
@@ -3071,9 +3072,9 @@ function createVirtualEmptyTrip(originNode, destNode, startMins, durationMins, a
     
     let dayIdx = Math.floor(shiftedMins / 1440) % 7;
 
-    // Ставимо "+" у відповідні колонки сирого масиву (Астрономічні 16-22, Логістичні 23-29)
-    dummyRow[16 + dayIdx] = "+"; 
+    // Ставимо "+" у відповідні колонки сирого масиву (Астрономічні 23-29, Логістичні 30-36)
     dummyRow[23 + dayIdx] = "+"; 
+    dummyRow[30 + dayIdx] = "+";
 
     let vTrip = new Trip(dummyRow);
     
